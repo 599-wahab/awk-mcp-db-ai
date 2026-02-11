@@ -1,0 +1,32 @@
+{
+  "lastQuery": "I want a line chart on my monthly earnings.",
+  "timestamp": "2026-02-11T18:30:57.764Z",
+  "resultCount": 3,
+  "queryHistory": [
+    {
+      "query": "hi",
+      "timestamp": "2026-02-11T18:07:04.263Z",
+      "success": true
+    },
+    {
+      "query": "i want a line graph on all my incomes , paid and unpaid bills ",
+      "timestamp": "2026-02-11T18:08:03.004Z",
+      "success": true
+    },
+    {
+      "query": "I want a line chart on my monthly earnings.",
+      "timestamp": "2026-02-11T18:14:38.471Z",
+      "success": true
+    },
+    {
+      "query": "I want a line chart on my monthly earnings.",
+      "timestamp": "2026-02-11T18:26:26.751Z",
+      "success": true
+    },
+    {
+      "query": "I want a line chart on my monthly earnings.",
+      "timestamp": "2026-02-11T18:30:57.764Z",
+      "success": true
+    }
+  ]
+}
