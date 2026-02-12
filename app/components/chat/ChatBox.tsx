@@ -32,14 +32,16 @@ export default function ChatBox() {
     const data = await res.json();
 
     setMessages(m => [
-      ...m,
-      {
-        id: Date.now().toString(),
-        content: data.explanation,
-        isUser: false,
-        ...data,
-      },
-    ]);
+    ...m,
+    {
+      id: Date.now().toString(),
+      content: data.explanation,
+      isUser: false,
+      timestamp: new Date(),
+      ...data,
+    },
+  ]);
+
 
     setLoading(false);
   }
@@ -53,6 +55,7 @@ export default function ChatBox() {
         id: Date.now().toString(),
         content: question,
         isUser: true,
+        timestamp: new Date(),
       },
     ]);
 

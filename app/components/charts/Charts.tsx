@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  BarChart,
-  Bar,
   LineChart,
   Line,
   XAxis,
@@ -10,83 +8,68 @@ import {
   Tooltip,
   CartesianGrid,
   ResponsiveContainer,
+  BarChart,
+  Bar,
   PieChart,
   Pie,
   Cell,
 } from "recharts";
-import Card from "../ui/Card";
 
-const COLORS = ["#4f46e5", "#7c3aed", "#06b6d4", "#10b981", "#f59e0b"];
+const COLORS = ["#6366f1", "#8b5cf6", "#06b6d4", "#10b981", "#f59e0b"];
 
-interface ChartData {
-  [key: string]: string | number;
-}
-
-export default function Charts({
-  data,
-  type,
-  onDrillDown,
-}: {
-  data: ChartData[];
-  type: "bar" | "pie" | "line";
-  onDrillDown?: (value: string) => void;
-}) {
+export default function Charts({ data }: { data: any[] }) {
   if (!data || data.length === 0) return null;
 
   const keys = Object.keys(data[0]);
-  const xKey = keys[0];
-  const yKey = keys.find(k => typeof data[0][k] === "number") || keys[1];
 
-  return (
-    <Card>
+  const numericKeys = keys.filter(
+    (k) => typeof data[0][k] === "number"
+  );
+
+  const labelKey = keys.find(
+    (k) => typeof data[0][k] !== "number"
+  );
+
+  if (!labelKey || numericKeys.length === 0) return null;
+
+  // MULTI LINE CHART (for multiple income columns)
+  if (numericKeys.length > 1) {
+    return (
       <div className="h-[350px]">
         <ResponsiveContainer width="100%" height="100%">
-          {type === "pie" && (
-            <PieChart>
-              <Pie
-                data={data}
-                dataKey={yKey}
-                nameKey={xKey}
-                outerRadius={120}
-                onClick={(d: any) =>
-                  onDrillDown && onDrillDown(d.payload[xKey])
-                }
-              >
-                {data.map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          )}
+          <LineChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey={labelKey} />
+            <YAxis />
+            <Tooltip />
 
-          {type === "bar" && (
-            <BarChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey={xKey} />
-              <YAxis />
-              <Tooltip />
-              <Bar
-                dataKey={yKey}
-                fill="#4f46e5"
-                onClick={(d: any) =>
-                  onDrillDown && onDrillDown(d.payload[xKey])
-                }
+            {numericKeys.map((key, index) => (
+              <Line
+                key={key}
+                type="monotone"
+                dataKey={key}
+                stroke={COLORS[index % COLORS.length]}
+                strokeWidth={2}
               />
-            </BarChart>
-          )}
-
-          {type === "line" && (
-            <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey={xKey} />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey={yKey} stroke="#4f46e5" />
-            </LineChart>
-          )}
+            ))}
+          </LineChart>
         </ResponsiveContainer>
       </div>
-    </Card>
+    );
+  }
+
+  // SINGLE METRIC → BAR
+  return (
+    <div className="h-[350px]">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey={labelKey} />
+          <YAxis />
+          <Tooltip />
+          <Bar dataKey={numericKeys[0]} fill="#6366f1" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
