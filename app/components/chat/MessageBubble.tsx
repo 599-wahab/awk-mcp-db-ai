@@ -53,7 +53,10 @@ export default function MessageBubble({ message }: Props) {
           message.visualization !== "kpi" &&
           message.visualization !== "table" && (
             <div className="mt-4">
-              <Charts data={message.result} />
+              <Charts 
+                data={message.result} 
+                type={message.visualization === "bar" ? "bar" : "line"} 
+              />
             </div>
           )}
 

@@ -1,36 +1,155 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AWKT-LD Database AI
 
-## Getting Started
+Universal Multi-AI Database Analytics Assistant
 
-First, run the development server:
+## 🚀 Overview
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+AWKT-LD is an AI-powered database analytics platform that:
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- Connects to PostgreSQL
+- Uses multiple AI providers (Gemini, OpenAI, DeepSeek)
+- Generates SQL automatically
+- Detects visualization type
+- Renders KPI / Chart / Table dynamically
+- Provides AI insights
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🧠 Multi-AI Architecture
 
-## Learn More
+The system uses:
 
-To learn more about Next.js, take a look at the following resources:
+- Google Gemini
+- OpenAI (ChatGPT)
+- DeepSeek
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Parallel execution:
+All providers run simultaneously.
+First successful response wins.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Forced execution supported:
+- "use chatgpt"
+- "use deepseek"
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 📊 Smart Visualization
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Auto-detects:
+- KPI (single number)
+- Line chart
+- Bar chart
+- Pie chart
+- Table fallback
+
+---
+
+## 🔐 Security
+
+- SQL Safety Guard
+- SELECT-only enforcement
+- Schema awareness
+- MCP authentication header
+
+---
+
+## ⚙️ Environment Variables
+
+Create `.env.local`:
+
+DATABASE_URL=
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+DEEPSEEK_API_KEY=
+MCP_API_KEY=erp-system-123
+
+## 🏗 Architecture
+
+User
+↓
+Next.js API
+↓
+Multi-AI Router
+↓
+SQL Validation
+↓
+PostgreSQL
+↓
+Smart Visualization
+
+
+## 📈 Features
+
+- Parallel AI execution
+- Visualization detection
+- Drill-down ready
+- Insight generation
+- Chart auto-rendering
+- Live schema memory
+
+---
+
+## 🛠 TODO (Recommended Next Upgrades)
+
+### 🔥 High Priority
+- AI voting system (3 SQL outputs → choose best)
+- Query caching
+- Provider health monitoring
+- Rate limit fallback logic
+- Auto-retry on DB disconnection
+
+### 🚀 Advanced Features
+- AI cost optimization routing
+- Enterprise RBAC
+- Query history tracking
+- Client-level isolation
+- AI performance scoring
+
+### 🤖 Future AI Features
+- Natural language explanation generation
+- Predictive analytics
+- AI anomaly detection
+- AI trend forecasting
+
+### 🏢 Enterprise Expansion
+- Multi-database support
+- Data warehouse integration
+- Vector DB integration
+- Custom fine-tuned LLM
+
+---
+
+## 🧠 Can I Train My Own LLM?
+
+Yes.
+
+Options:
+1. Fine-tune OpenAI (if allowed)
+2. Train local LLM (Llama / Mistral)
+3. Build retrieval-based memory system
+4. Use conversation logs as dataset
+
+⚠️ Always check data privacy compliance.
+
+---
+
+## 👑 Vision
+
+Turn AWKT-LD into:
+
+Enterprise AI Data Brain
+
+- Multi-AI orchestration
+- Live data intelligence
+- Client-ready SaaS
+
+---
+
+Built with:
+- Next.js
+- Prisma
+- PostgreSQL
+- Gemini
+- OpenAI
+- DeepSeek
+- Recharts
