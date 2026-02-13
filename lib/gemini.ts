@@ -1,49 +1,43 @@
-//lib/gemini.ts
-import { GoogleGenAI } from "@google/genai";
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY!,
-});
-
-// small helper
-const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
-
 export async function askGemini(prompt: string): Promise<string> {
-  const models = [
-    "gemini-3-flash-preview", // fastest, but overloaded often
-    "gemini-1.5-flash",       // fallback
-    "gemini-1.5-pro",         // last resort (slower)
-  ];
-
-  let lastError: any;
-
-  for (const model of models) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: prompt,
-        });
-
-        if (response.text) {
-          console.log(`Gemini success with ${model}`);
-          return response.text.trim();
-        }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(
-          `Gemini error with ${model} (attempt ${attempt}):`,
-          err?.message || err
-        );
-
-        // wait before retry
-        await sleep(800);
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0,
+            topP: 0.9
+          }
+        }),
       }
-    }
-  }
+    );
 
-  throw new Error(
-    lastError?.message ||
-      "All Gemini models are currently overloaded. Try again later."
-  );
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error("Gemini API error:", data);
+      throw new Error(data?.error?.message || "Gemini API failed");
+    }
+
+    const text =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      throw new Error("Empty response from Gemini");
+    }
+
+    return text.trim();
+  } catch (error: any) {
+    console.error("Gemini Error:", error?.message || error);
+    throw new Error(error?.message || "Gemini failed to generate SQL.");
+  }
 }

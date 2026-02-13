@@ -1,9 +1,11 @@
-import { askAI } from "@/lib/ai-router";
+import { askGemini } from "@/lib/gemini";
 import { prisma } from "@/lib/prisma";
 import { isSafeSQL } from "@/lib/sql-guard";
 import { loadOrCreateSchema } from "@/lib/memory/schema-loader";
 
-/* ---------------------- HELPERS ---------------------- */
+/* =====================================================
+   UTILITIES
+===================================================== */
 
 function serializeResult(result: any[]) {
   return result.map((row) => {
@@ -17,8 +19,28 @@ function serializeResult(result: any[]) {
   });
 }
 
+function formatMonth(dateStr: string) {
+  const d = new Date(dateStr);
+  return d.toLocaleString("default", { month: "short", year: "numeric" });
+}
+
+function formatCurrency(num: number) {
+  return Number(num).toLocaleString();
+}
+
+/* =====================================================
+   SMART VISUAL DETECTION
+===================================================== */
+
 function detectVisualization(result: any[], question: string) {
   if (!result || result.length === 0) return "none";
+
+  const q = question.toLowerCase();
+
+  if (q.includes("stacked")) return "stacked";
+  if (q.includes("pie")) return "pie";
+  if (q.includes("bar")) return "bar";
+  if (q.includes("line") || q.includes("trend")) return "line";
 
   const numericKeys = Object.keys(result[0]).filter(
     (k) => typeof result[0][k] === "number"
@@ -28,18 +50,39 @@ function detectVisualization(result: any[], question: string) {
     return "kpi";
   }
 
-  const q = question.toLowerCase();
-
-  if (q.includes("pie")) return "pie";
-  if (q.includes("bar")) return "bar";
-  if (q.match(/line|trend|graph|chart/i)) return "line";
-
   if (result.length > 1 && numericKeys.length >= 1) {
     return "line";
   }
 
   return "table";
 }
+
+/* =====================================================
+   STACKED PIVOT ENGINE
+===================================================== */
+
+function pivotForStacked(result: any[]) {
+  if (!result.length) return result;
+  if (!("category" in result[0])) return result;
+
+  const map: any = {};
+
+  result.forEach((row) => {
+    const month = row.month;
+
+    if (!map[month]) {
+      map[month] = { month: formatMonth(month) };
+    }
+
+    map[month][row.category] = Number(row.total_amount);
+  });
+
+  return Object.values(map);
+}
+
+/* =====================================================
+   INSIGHTS + GROWTH
+===================================================== */
 
 function generateInsights(result: any[]) {
   if (!result || result.length < 2) return [];
@@ -52,36 +95,73 @@ function generateInsights(result: any[]) {
 
   const sorted = [...result].sort((a, b) => b[numericKey] - a[numericKey]);
 
+  const highest = sorted[0];
+  const lowest = sorted[sorted.length - 1];
+
   return [
-    `Highest: ${sorted[0][labelKey]} (${sorted[0][
-      numericKey
-    ].toLocaleString()})`,
-    `Lowest: ${sorted[sorted.length - 1][labelKey]} (${sorted[
-      sorted.length - 1
-    ][numericKey].toLocaleString()})`,
+    `${highest[labelKey]} has the highest value (${formatCurrency(
+      highest[numericKey]
+    )}).`,
+    `${lowest[labelKey]} has the lowest value (${formatCurrency(
+      lowest[numericKey]
+    )}).`,
   ];
 }
 
-function buildExplanation(result: any[], question: string) {
-  if (!result || result.length === 0)
-    return "No matching records were found.";
+function calculateGrowth(result: any[]) {
+  if (result.length < 2) return null;
 
-  if (question.toLowerCase().includes("today"))
-    return "Here is today's total income.";
+  const numericKey = Object.keys(result[0]).find(
+    (k) => typeof result[0][k] === "number"
+  );
 
-  if (question.toLowerCase().includes("month"))
-    return "Here is your income breakdown by month.";
+  if (!numericKey) return null;
 
-  if (question.match(/chart|graph|line|bar|pie/i))
-    return "Here is the visual breakdown of your data.";
+  const last = result[result.length - 1][numericKey];
+  const prev = result[result.length - 2][numericKey];
 
-  return "Here are your live database results.";
+  if (!prev) return null;
+
+  const growth = ((last - prev) / prev) * 100;
+
+  return growth.toFixed(2);
 }
 
-/* ---------------------- API ---------------------- */
+/* =====================================================
+   HUMAN EXPLANATION ENGINE
+===================================================== */
+
+function buildExplanation(result: any[], question: string) {
+  if (!result.length) return "No matching records were found.";
+
+  const q = question.toLowerCase();
+
+  if (q.includes("stacked")) {
+    return "Here is your stacked monthly earnings breakdown by category.";
+  }
+
+  if (q.includes("month")) {
+    return "Here is your monthly income summary.";
+  }
+
+  if (q.includes("today")) {
+    return "Here is today's total income.";
+  }
+
+  if (q.includes("booking") && q.includes("zain")) {
+    return `Yes, ${result.length} booking(s) were found for Zain.`;
+  }
+
+  return "Here are your requested results.";
+}
+
+/* =====================================================
+   MAIN API
+===================================================== */
 
 export async function POST(req: Request) {
   const apiKey = req.headers.get("x-mcp-key");
+
   if (apiKey !== process.env.MCP_API_KEY) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -90,62 +170,104 @@ export async function POST(req: Request) {
   const schema = await loadOrCreateSchema();
 
   const prompt = `
-You are a PostgreSQL analytics AI.
+You are an enterprise PostgreSQL analytics AI.
+
+Return ONLY valid SELECT SQL.
+No markdown.
+No explanation.
+No comments.
 
 Schema:
 ${JSON.stringify(schema)}
 
 Rules:
-- Return ONLY PostgreSQL SELECT
-- If user wants chart → GROUP BY something
-- Monthly → GROUP BY month
-- Daily → GROUP BY date
-- Pie → GROUP BY category or payment_method
-- Never return markdown
+- Always GROUP BY when aggregating
+- Always ORDER BY ascending
+- Use DATE_TRUNC for time grouping
+- For stacked charts → return: month, category, total_amount
+- Use UNION ALL properly aligned
+- Never use unsafe SQL
+- Only SELECT queries allowed
 
-User:
+User question:
 ${question}
 `;
 
-  let provider: string | undefined;
-  const q = question.toLowerCase();
-
-  if (q.includes("chatgpt") || q.includes("openai")) {
-    provider = "OpenAI";
-  } else if (q.includes("deepseek")) {
-    provider = "DeepSeek";
-  }
-
-  let sql = await askAI(prompt, provider);
-
-  if (!sql || sql.length < 5) {
-    return Response.json(
-      { error: "AI failed to generate valid SQL." },
-      { status: 500 }
-    );
-  }
+  let sql = await askGemini(prompt);
 
   sql = sql.replace(/```sql/gi, "").replace(/```/g, "").trim();
 
   if (!isSafeSQL(sql)) {
-    return Response.json({ error: "Unsafe SQL blocked" }, { status: 400 });
+    return Response.json({ error: "Unsafe SQL blocked." }, { status: 400 });
   }
 
   try {
     const raw = (await prisma.$queryRawUnsafe(sql)) as any[];
-    const result = serializeResult(raw);
+    let result = serializeResult(raw);
+
+    const visualization = detectVisualization(result, question);
+
+    if (visualization === "stacked") {
+      result = pivotForStacked(result);
+    }
+
+    const growth = calculateGrowth(result);
 
     return Response.json({
       explanation: buildExplanation(result, question),
       sql,
       result,
-      visualization: detectVisualization(result, question),
+      visualization,
+      growth,
       insights: generateInsights(result),
     });
   } catch (err: any) {
-    return Response.json(
-      { error: "Database query failed", details: err.message },
-      { status: 500 }
-    );
+    console.warn("Initial query failed. Attempting auto-fix...");
+
+    const fixPrompt = `
+The following query failed:
+
+${sql}
+
+Error:
+${err.message}
+
+Fix it. Return ONLY corrected SELECT SQL.
+`;
+
+    try {
+      const fixedSQL = (
+        await askGemini(fixPrompt)
+      )
+        .replace(/```sql/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      if (!isSafeSQL(fixedSQL)) {
+        throw new Error("Corrected query unsafe.");
+      }
+
+      const raw = (await prisma.$queryRawUnsafe(fixedSQL)) as any[];
+      let result = serializeResult(raw);
+
+      const visualization = detectVisualization(result, question);
+
+      if (visualization === "stacked") {
+        result = pivotForStacked(result);
+      }
+
+      return Response.json({
+        explanation: "Query auto-corrected successfully.",
+        sql: fixedSQL,
+        result,
+        visualization,
+        insights: generateInsights(result),
+      });
+    } catch {
+      return Response.json(
+        { error: "Database query failed.", details: err.message },
+        { status: 500 }
+      );
+    }
   }
 }

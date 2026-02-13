@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Charts from "../charts/Charts";
 
 interface Props {
@@ -12,7 +13,7 @@ interface Props {
     visualization?: string;
     insights?: string[];
   };
-  onDrillDown?: (value: string) => void; 
+  onDrillDown?: (value: string) => void;
 }
 
 export default function MessageBubble({ message }: Props) {
@@ -23,10 +24,14 @@ export default function MessageBubble({ message }: Props) {
 
   const isAI = !message.isUser;
 
+  const [viewType, setViewType] = useState(
+    message.visualization || "line"
+  );
+
   return (
     <div className={`flex ${isAI ? "justify-start" : "justify-end"}`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+        className={`max-w-[90%] rounded-2xl px-4 py-3 ${
           isAI
             ? "bg-gray-50 border border-gray-200"
             : "bg-indigo-600 text-white"
@@ -47,17 +52,41 @@ export default function MessageBubble({ message }: Props) {
             </div>
           )}
 
-        {/* Chart */}
+        {/* Chart Controls */}
         {isAI &&
           message.result &&
           message.visualization !== "kpi" &&
           message.visualization !== "table" && (
-            <div className="mt-4">
-              <Charts 
-                data={message.result} 
-                type={message.visualization === "bar" ? "bar" : "line"} 
-              />
-            </div>
+            <>
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={() => setViewType("line")}
+                  className="px-3 py-1 text-xs bg-gray-200 rounded"
+                >
+                  Line
+                </button>
+                <button
+                  onClick={() => setViewType("bar")}
+                  className="px-3 py-1 text-xs bg-gray-200 rounded"
+                >
+                  Bar
+                </button>
+                <button
+                  onClick={() => setViewType("stacked")}
+                  className="px-3 py-1 text-xs bg-gray-200 rounded"
+                >
+                  Stacked
+                </button>
+                <button
+                  onClick={() => setViewType("pie")}
+                  className="px-3 py-1 text-xs bg-gray-200 rounded"
+                >
+                  Pie
+                </button>
+              </div>
+
+              <Charts data={message.result} type={viewType} />
+            </>
           )}
 
         {/* Table fallback */}
@@ -68,7 +97,7 @@ export default function MessageBubble({ message }: Props) {
               <table className="min-w-full border">
                 <thead>
                   <tr>
-                    {Object.keys(message.result[0]).map(col => (
+                    {Object.keys(message.result[0]).map((col) => (
                       <th key={col} className="border px-2 py-1">
                         {col}
                       </th>
