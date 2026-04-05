@@ -1,63 +1,75 @@
 // lib/gemini.ts
-// IMPORTANT: No top-level initialization — fixes Vercel build error
-// "API key must be set" happens when GoogleGenAI is created at module load time
 import { GoogleGenAI } from "@google/genai";
 
-// Lazy getter — only runs when a function is actually called (not at build time)
-function getAI(): GoogleGenAI {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error("GEMINI_API_KEY is not set in environment variables.");
-  return new GoogleGenAI({ apiKey: key });
+function getAI(key?: string | null) {
+  const apiKey = key || process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("NO_KEY");
+  return new GoogleGenAI({ apiKey });
 }
 
-export async function askGemini(prompt: string): Promise<string> {
-  const response = await getAI().models.generateContent({
-    model: "gemini-2.0-flash",
-    contents: prompt,
-  });
-  return response.text ?? "";
+function parseGeminiError(err: any): string {
+  const msg = err?.message || String(err);
+
+  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota")) {
+    return "QUOTA_EXCEEDED";
+  }
+  if (msg.includes("API_KEY_INVALID") || msg.includes("invalid api key") || msg.includes("API key not valid")) {
+    return "INVALID_KEY";
+  }
+  if (msg.includes("NO_KEY")) {
+    return "NO_KEY";
+  }
+  return "AI_ERROR:" + msg.slice(0, 100);
 }
 
-export async function askGeminiForSQL(
-  question: string,
-  schemaJson: string
-): Promise<string> {
-  const prompt = `You are a PostgreSQL expert AI assistant.
+export async function callGemini(prompt: string, geminiKey?: string | null): Promise<string> {
+  // Try gemini-2.0-flash first, fall back to gemini-1.5-flash on quota error
+  const models = ["gemini-2.0-flash", "gemini-1.5-flash"];
 
-Return ONLY a valid SELECT SQL query. No markdown, no explanation, no comments.
+  for (const model of models) {
+    try {
+      const ai = getAI(geminiKey);
+      const res = await ai.models.generateContent({ model, contents: prompt });
+      return res.text ?? "";
+    } catch (err: any) {
+      const parsed = parseGeminiError(err);
 
-Database schema:
-${schemaJson}
+      // If quota on this model, try next model
+      if (parsed === "QUOTA_EXCEEDED" && model !== models[models.length - 1]) {
+        continue;
+      }
+
+      // Re-throw with clean error code
+      throw new Error(parsed);
+    }
+  }
+
+  throw new Error("QUOTA_EXCEEDED");
+}
+
+export async function askGeminiForSQL(question: string, schemaJson: string, geminiKey?: string | null): Promise<string> {
+  const prompt = `You are a PostgreSQL expert. Return ONLY a valid SELECT SQL query. No markdown, no explanation.
+
+Schema: ${schemaJson}
 
 Rules:
 - Only SELECT queries
 - Always GROUP BY when aggregating
-- ORDER BY ascending unless asked otherwise
-- Use DATE_TRUNC for time-based grouping
-- For stacked charts return: month, category, total_amount
-- Understand both Urdu and English questions
+- ORDER BY ascending unless asked
+- Use DATE_TRUNC for time grouping
+- Understand Urdu and English questions
 
-User question: ${question}`;
+Question: ${question}`;
 
-  const raw = await askGemini(prompt);
+  const raw = await callGemini(prompt, geminiKey);
   return raw.replace(/```sql/gi, "").replace(/```/g, "").trim();
 }
 
-export async function askGeminiForExplanation(
-  question: string,
-  result: any[]
-): Promise<string> {
-  const prompt = `You are a bilingual data analyst who speaks Urdu and English fluently.
-
+export async function askGeminiForExplanation(question: string, result: any[], geminiKey?: string | null): Promise<string> {
+  const prompt = `You are a bilingual analyst (Urdu + English).
 User asked: "${question}"
-Database result: ${JSON.stringify(result.slice(0, 15))}
+Result: ${JSON.stringify(result.slice(0, 10))}
+Reply in the same language as the question. 2-3 sentences max. No technical terms.`;
 
-Instructions:
-- Detect if the question is in Urdu (including Roman Urdu) or English
-- Reply in the EXACT SAME language
-- Give a short, clear, friendly summary of what the data shows
-- Maximum 2-3 sentences
-- No technical terms, no SQL mentions`;
-
-  return await askGemini(prompt);
+  return await callGemini(prompt, geminiKey);
 }

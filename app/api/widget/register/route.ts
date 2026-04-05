@@ -6,8 +6,8 @@ import { randomBytes } from "crypto";
 export async function GET() {
   const session = await auth();
   if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 });
-
   const userId = (session.user as any).id;
+
   const apps = await prisma.connectedApp.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
@@ -15,7 +15,8 @@ export async function GET() {
       id: true, name: true, apiKey: true, origin: true,
       isActive: true, totalChats: true, lastActiveAt: true,
       createdAt: true, schemaBuiltAt: true, dbType: true,
-      dbUrl: false, // never expose db url
+      geminiKey: true,
+      // Never expose dbUrl in list
     },
   });
 
@@ -25,19 +26,24 @@ export async function GET() {
 export async function POST(req: Request) {
   const session = await auth();
   if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 });
-
   const userId = (session.user as any).id;
-  const { name, origin, dbUrl, dbType } = await req.json();
 
-  if (!name) return Response.json({ error: "Name is required" }, { status: 400 });
+  const { name, origin, dbUrl, dbType, geminiKey } = await req.json();
+  if (!name) return Response.json({ error: "Name required" }, { status: 400 });
 
   const apiKey = randomBytes(24).toString("hex");
 
   const app = await prisma.connectedApp.create({
-    data: { userId, name, apiKey, origin: origin || null, dbUrl: dbUrl || null, dbType: dbType || "POSTGRESQL" },
+    data: {
+      userId, name, apiKey,
+      origin: origin || null,
+      dbUrl: dbUrl || null,
+      dbType: dbType || "POSTGRESQL",
+      geminiKey: geminiKey || null,
+    },
   });
 
-  const baseUrl = process.env.NEXTAUTH_URL || "https://your-app.vercel.app";
+  const baseUrl = process.env.NEXTAUTH_URL || "https://awk-tld-bot.vercel.app";
 
   return Response.json({
     id: app.id,
@@ -50,41 +56,35 @@ export async function POST(req: Request) {
 export async function DELETE(req: Request) {
   const session = await auth();
   if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 });
-
   const userId = (session.user as any).id;
   const { id } = await req.json();
 
   const app = await prisma.connectedApp.findUnique({ where: { id } });
-  if (!app || app.userId !== userId) {
-    return Response.json({ error: "Not found" }, { status: 404 });
-  }
+  if (!app || app.userId !== userId) return Response.json({ error: "Not found" }, { status: 404 });
 
   await prisma.connectedApp.delete({ where: { id } });
   return Response.json({ success: true });
 }
 
-// Update DB URL or rebuild schema
 export async function PATCH(req: Request) {
   const session = await auth();
   if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 });
-
   const userId = (session.user as any).id;
-  const { id, dbUrl, dbType, name, origin } = await req.json();
+  const { id, dbUrl, dbType, name, origin, geminiKey } = await req.json();
 
   const app = await prisma.connectedApp.findUnique({ where: { id } });
-  if (!app || app.userId !== userId) {
-    return Response.json({ error: "Not found" }, { status: 404 });
-  }
+  if (!app || app.userId !== userId) return Response.json({ error: "Not found" }, { status: 404 });
 
-  const updated = await prisma.connectedApp.update({
+  await prisma.connectedApp.update({
     where: { id },
     data: {
       ...(name && { name }),
       ...(origin !== undefined && { origin }),
-      ...(dbUrl && { dbUrl, schemaJson: null, schemaBuiltAt: null }), // reset cache when DB changes
+      ...(dbUrl && { dbUrl, schemaJson: null, schemaBuiltAt: null }),
       ...(dbType && { dbType }),
+      ...(geminiKey !== undefined && { geminiKey: geminiKey || null }),
     },
   });
 
-  return Response.json({ success: true, id: updated.id });
+  return Response.json({ success: true });
 }

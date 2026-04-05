@@ -71,14 +71,15 @@ model ConnectedApp {
   userId        String
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name          String
-  apiKey        String    @unique  // user pastes this in their ERP settings
-  origin        String?            // allowed origin e.g. https://myerp.vercel.app
+  apiKey        String    @unique
+  origin        String?
   isActive      Boolean   @default(true)
-  dbUrl         String?            // their database connection string
+  dbUrl         String?
   dbType        DbType    @default(POSTGRESQL)
-  schemaJson    String?   @db.Text // auto-built schema memory
+  geminiKey     String?   // Per-app Gemini key (overrides env var)
+  schemaJson    String?   @db.Text
   schemaBuiltAt DateTime?
-  contextJson   String?   @db.Text // extra hints about their DB
+  contextJson   String?   @db.Text
   totalChats    Int       @default(0)
   lastActiveAt  DateTime?
   createdAt     DateTime  @default(now())
