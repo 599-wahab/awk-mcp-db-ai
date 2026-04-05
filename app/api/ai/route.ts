@@ -1,11 +1,9 @@
-import { askGemini } from "@/lib/gemini";
+// app/api/ai/route.ts
 import { prisma } from "@/lib/prisma";
 import { isSafeSQL } from "@/lib/sql-guard";
-import { loadOrCreateSchema } from "@/lib/memory/schema-loader";
-
-/* =====================================================
-   UTILITIES
-===================================================== */
+import { getAppSchema } from "@/lib/memory/schema-loader";
+import { askGeminiForSQL, askGeminiForExplanation } from "@/lib/gemini";
+import { PrismaClient } from "@prisma/client";
 
 function serializeResult(result: any[]) {
   return result.map((row) => {
@@ -19,255 +17,176 @@ function serializeResult(result: any[]) {
   });
 }
 
-function formatMonth(dateStr: string) {
-  const d = new Date(dateStr);
-  return d.toLocaleString("default", { month: "short", year: "numeric" });
-}
-
-function formatCurrency(num: number) {
-  return Number(num).toLocaleString();
-}
-
-/* =====================================================
-   SMART VISUAL DETECTION
-===================================================== */
-
 function detectVisualization(result: any[], question: string) {
-  if (!result || result.length === 0) return "none";
-
+  if (!result?.length) return "none";
   const q = question.toLowerCase();
-
-  if (q.includes("stacked")) return "stacked";
-  if (q.includes("pie")) return "pie";
-  if (q.includes("bar")) return "bar";
-  if (q.includes("line") || q.includes("trend")) return "line";
-
-  const numericKeys = Object.keys(result[0]).filter(
-    (k) => typeof result[0][k] === "number"
-  );
-
-  if (result.length === 1 && numericKeys.length === 1) {
-    return "kpi";
-  }
-
-  if (result.length > 1 && numericKeys.length >= 1) {
-    return "line";
-  }
-
+  if (q.includes("stacked") || q.includes("اسٹیکڈ")) return "stacked";
+  if (q.includes("pie") || q.includes("پائی")) return "pie";
+  if (q.includes("bar") || q.includes("بار")) return "bar";
+  if (q.includes("line") || q.includes("trend") || q.includes("رجحان")) return "line";
+  const numericKeys = Object.keys(result[0]).filter((k) => typeof result[0][k] === "number");
+  if (result.length === 1 && numericKeys.length === 1) return "kpi";
+  if (result.length > 1 && numericKeys.length >= 1) return "line";
   return "table";
 }
 
-/* =====================================================
-   STACKED PIVOT ENGINE
-===================================================== */
-
 function pivotForStacked(result: any[]) {
-  if (!result.length) return result;
-  if (!("category" in result[0])) return result;
-
+  if (!result.length || !("category" in result[0])) return result;
   const map: any = {};
-
   result.forEach((row) => {
-    const month = row.month;
-
-    if (!map[month]) {
-      map[month] = { month: formatMonth(month) };
+    if (!map[row.month]) {
+      map[row.month] = {
+        month: new Date(row.month).toLocaleString("default", { month: "short", year: "numeric" }),
+      };
     }
-
-    map[month][row.category] = Number(row.total_amount);
+    map[row.month][row.category] = Number(row.total_amount);
   });
-
   return Object.values(map);
 }
 
-/* =====================================================
-   INSIGHTS + GROWTH
-===================================================== */
-
 function generateInsights(result: any[]) {
-  if (!result || result.length < 2) return [];
-
+  if (!result?.length || result.length < 2) return [];
   const keys = Object.keys(result[0]);
-  const numericKey = keys.find((k) => typeof result[0][k] === "number");
+  const numKey = keys.find((k) => typeof result[0][k] === "number");
   const labelKey = keys.find((k) => typeof result[0][k] !== "number");
-
-  if (!numericKey || !labelKey) return [];
-
-  const sorted = [...result].sort((a, b) => b[numericKey] - a[numericKey]);
-
-  const highest = sorted[0];
-  const lowest = sorted[sorted.length - 1];
-
+  if (!numKey || !labelKey) return [];
+  const sorted = [...result].sort((a, b) => b[numKey] - a[numKey]);
   return [
-    `${highest[labelKey]} has the highest value (${formatCurrency(
-      highest[numericKey]
-    )}).`,
-    `${lowest[labelKey]} has the lowest value (${formatCurrency(
-      lowest[numericKey]
-    )}).`,
+    `${sorted[0][labelKey]} has the highest value (${Number(sorted[0][numKey]).toLocaleString()}).`,
+    `${sorted[sorted.length - 1][labelKey]} has the lowest value (${Number(sorted[sorted.length - 1][numKey]).toLocaleString()}).`,
   ];
 }
 
-function calculateGrowth(result: any[]) {
-  if (result.length < 2) return null;
-
-  const numericKey = Object.keys(result[0]).find(
-    (k) => typeof result[0][k] === "number"
-  );
-
-  if (!numericKey) return null;
-
-  const last = result[result.length - 1][numericKey];
-  const prev = result[result.length - 2][numericKey];
-
-  if (!prev) return null;
-
-  const growth = ((last - prev) / prev) * 100;
-
-  return growth.toFixed(2);
+export async function OPTIONS() {
+  return new Response(null, {
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, x-api-key",
+    },
+  });
 }
-
-/* =====================================================
-   HUMAN EXPLANATION ENGINE
-===================================================== */
-
-function buildExplanation(result: any[], question: string) {
-  if (!result.length) return "No matching records were found.";
-
-  const q = question.toLowerCase();
-
-  if (q.includes("stacked")) {
-    return "Here is your stacked monthly earnings breakdown by category.";
-  }
-
-  if (q.includes("month")) {
-    return "Here is your monthly income summary.";
-  }
-
-  if (q.includes("today")) {
-    return "Here is today's total income.";
-  }
-
-  if (q.includes("booking") && q.includes("zain")) {
-    return `Yes, ${result.length} booking(s) were found for Zain.`;
-  }
-
-  return "Here are your requested results.";
-}
-
-/* =====================================================
-   MAIN API
-===================================================== */
 
 export async function POST(req: Request) {
-  const apiKey = req.headers.get("x-mcp-key");
+  // CORS headers for cross-origin widget requests
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, x-api-key",
+  };
 
-  if (apiKey !== process.env.MCP_API_KEY) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const apiKey = req.headers.get("x-api-key");
+  if (!apiKey) {
+    return Response.json({ error: "API key required" }, { status: 401, headers: corsHeaders });
+  }
+
+  // Look up the app by API key
+  const app = await prisma.connectedApp.findUnique({
+    where: { apiKey },
+  });
+
+  if (!app || !app.isActive) {
+    return Response.json({ error: "Invalid or inactive API key" }, { status: 401, headers: corsHeaders });
+  }
+
+  if (!app.dbUrl) {
+    return Response.json(
+      { error: "No database connected. Please add your DB URL in settings." },
+      { status: 400, headers: corsHeaders }
+    );
   }
 
   const { question } = await req.json();
-  const schema = await loadOrCreateSchema();
-
-  const prompt = `
-You are an enterprise PostgreSQL analytics AI.
-
-Return ONLY valid SELECT SQL.
-No markdown.
-No explanation.
-No comments.
-
-Schema:
-${JSON.stringify(schema)}
-
-Rules:
-- Always GROUP BY when aggregating
-- Always ORDER BY ascending
-- Use DATE_TRUNC for time grouping
-- For stacked charts → return: month, category, total_amount
-- Use UNION ALL properly aligned
-- Never use unsafe SQL
-- Only SELECT queries allowed
-
-User question:
-${question}
-`;
-
-  let sql = await askGemini(prompt);
-
-  sql = sql.replace(/```sql/gi, "").replace(/```/g, "").trim();
-
-  if (!isSafeSQL(sql)) {
-    return Response.json({ error: "Unsafe SQL blocked." }, { status: 400 });
+  if (!question?.trim()) {
+    return Response.json({ error: "Question is required" }, { status: 400, headers: corsHeaders });
   }
 
+  // Load schema memory
+  let schema: object;
   try {
-    const raw = (await prisma.$queryRawUnsafe(sql)) as any[];
-    let result = serializeResult(raw);
+    schema = await getAppSchema(app.id);
+  } catch {
+    schema = {};
+  }
 
-    const visualization = detectVisualization(result, question);
+  const schemaStr = JSON.stringify(schema);
 
-    if (visualization === "stacked") {
-      result = pivotForStacked(result);
-    }
-
-    const growth = calculateGrowth(result);
-
-    return Response.json({
-      explanation: buildExplanation(result, question),
-      sql,
-      result,
-      visualization,
-      growth,
-      insights: generateInsights(result),
-    });
+  // Generate SQL
+  let sql: string;
+  try {
+    sql = await askGeminiForSQL(question, schemaStr);
   } catch (err: any) {
-    console.warn("Initial query failed. Attempting auto-fix...");
+    return Response.json({ error: "AI failed to generate SQL", details: err.message }, { status: 500, headers: corsHeaders });
+  }
 
-    const fixPrompt = `
-The following query failed:
+  if (!isSafeSQL(sql)) {
+    return Response.json({ error: "Unsafe SQL blocked" }, { status: 400, headers: corsHeaders });
+  }
 
-${sql}
+  // Run SQL on user's database
+  const userPrisma = new PrismaClient({ datasources: { db: { url: app.dbUrl } } });
 
-Error:
-${err.message}
+  try {
+    const raw = await userPrisma.$queryRawUnsafe(sql) as any[];
+    let result = serializeResult(raw);
+    const visualization = detectVisualization(result, question);
+    if (visualization === "stacked") result = pivotForStacked(result);
 
-Fix it. Return ONLY corrected SELECT SQL.
-`;
+    const explanation = await askGeminiForExplanation(question, result);
 
+    // Log chat
+    await prisma.chatLog.create({
+      data: {
+        appId: app.id,
+        question,
+        generatedSql: sql,
+        result: JSON.stringify(result),
+        explanation,
+        wasSuccessful: true,
+      },
+    });
+
+    // Update stats
+    await prisma.connectedApp.update({
+      where: { id: app.id },
+      data: { totalChats: { increment: 1 }, lastActiveAt: new Date() },
+    });
+
+    return Response.json(
+      { explanation, sql, result, visualization, insights: generateInsights(result) },
+      { headers: corsHeaders }
+    );
+  } catch (err: any) {
+    // Auto-fix attempt
     try {
-      const fixedSQL = (
-        await askGemini(fixPrompt)
-      )
-        .replace(/```sql/gi, "")
-        .replace(/```/g, "")
-        .trim();
-
-      if (!isSafeSQL(fixedSQL)) {
-        throw new Error("Corrected query unsafe.");
-      }
-
-      const raw = (await prisma.$queryRawUnsafe(fixedSQL)) as any[];
-      let result = serializeResult(raw);
-
-      const visualization = detectVisualization(result, question);
-
-      if (visualization === "stacked") {
-        result = pivotForStacked(result);
-      }
-
-      return Response.json({
-        explanation: "Query auto-corrected successfully.",
-        sql: fixedSQL,
-        result,
-        visualization,
-        insights: generateInsights(result),
-      });
-    } catch {
-      return Response.json(
-        { error: "Database query failed.", details: err.message },
-        { status: 500 }
+      const fixedSql = await askGeminiForSQL(
+        `Fix this failing SQL:\n${sql}\nError: ${err.message}\n\nReturn only the corrected SELECT SQL.`,
+        schemaStr
       );
+      if (!isSafeSQL(fixedSql)) throw new Error("Fixed SQL is unsafe");
+
+      const raw = await userPrisma.$queryRawUnsafe(fixedSql) as any[];
+      let result = serializeResult(raw);
+      const visualization = detectVisualization(result, question);
+      if (visualization === "stacked") result = pivotForStacked(result);
+      const explanation = await askGeminiForExplanation(question, result);
+
+      await prisma.chatLog.create({
+        data: { appId: app.id, question, generatedSql: fixedSql, result: JSON.stringify(result), explanation, wasSuccessful: true },
+      });
+      await prisma.connectedApp.update({
+        where: { id: app.id },
+        data: { totalChats: { increment: 1 }, lastActiveAt: new Date() },
+      });
+
+      return Response.json({ explanation, sql: fixedSql, result, visualization, insights: generateInsights(result) }, { headers: corsHeaders });
+    } catch {
+      await prisma.chatLog.create({
+        data: { appId: app.id, question, generatedSql: sql, wasSuccessful: false },
+      });
+      return Response.json({ error: "Query failed", details: err.message }, { status: 500, headers: corsHeaders });
     }
+  } finally {
+    await userPrisma.$disconnect();
   }
 }

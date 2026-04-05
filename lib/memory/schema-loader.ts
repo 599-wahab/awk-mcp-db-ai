@@ -1,53 +1,76 @@
-//lib/memory/schema-loader.ts
-import fs from "fs";
-import path from "path";
+// lib/memory/schema-loader.ts
+// Loads or builds the schema memory for a connected app
+
 import { prisma } from "@/lib/prisma";
+import { PrismaClient } from "@prisma/client";
 
-const MEMORY_PATH = path.join(
-  process.cwd(),
-  "lib/memory/db-schema.json"
-);
+// Build schema from a remote database URL
+export async function buildSchemaFromUrl(dbUrl: string): Promise<object> {
+  // Create a temp Prisma client pointing to the user's DB
+  const tempPrisma = new PrismaClient({ datasources: { db: { url: dbUrl } } });
 
-export async function loadOrCreateSchema() {
-  // 1️⃣ If file exists, try to read it safely
-  if (fs.existsSync(MEMORY_PATH)) {
-    try {
-      const content = fs.readFileSync(MEMORY_PATH, "utf-8");
+  try {
+    const rows = await tempPrisma.$queryRaw<any[]>`
+      SELECT 
+        table_name,
+        column_name,
+        data_type,
+        is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+      ORDER BY table_name, ordinal_position
+    `;
 
-      // handle empty file
-      if (!content.trim()) {
-        throw new Error("Schema file is empty");
-      }
-
-      return JSON.parse(content);
-    } catch (err) {
-      console.warn(
-        "⚠️ MCP memory corrupted. Rebuilding schema...",
-        err
-      );
-      // fall through to rebuild
+    // Group by table
+    const schema: Record<string, any[]> = {};
+    for (const row of rows) {
+      if (!schema[row.table_name]) schema[row.table_name] = [];
+      schema[row.table_name].push({
+        column: row.column_name,
+        type: row.data_type,
+        nullable: row.is_nullable === "YES",
+      });
     }
+
+    return schema;
+  } finally {
+    await tempPrisma.$disconnect();
+  }
+}
+
+// Get schema for an app (from cache or rebuild)
+export async function getAppSchema(appId: string): Promise<object> {
+  const app = await prisma.connectedApp.findUnique({
+    where: { id: appId },
+  });
+
+  if (!app) throw new Error("App not found");
+
+  // Use cached schema if less than 24 hours old
+  const cacheValid =
+    app.schemaJson &&
+    app.schemaBuiltAt &&
+    Date.now() - app.schemaBuiltAt.getTime() < 24 * 60 * 60 * 1000;
+
+  if (cacheValid) {
+    return JSON.parse(app.schemaJson!);
   }
 
-  // 2️⃣ Study DB again (self-healing)
-  const schema = await prisma.$queryRaw`
-    SELECT
-      table_name,
-      column_name,
-      data_type
-    FROM information_schema.columns
-    WHERE table_schema='public'
-  `;
+  // Rebuild from live DB
+  if (!app.dbUrl) {
+    return {};
+  }
 
-  // 3️⃣ Ensure directory exists
-  fs.mkdirSync(path.dirname(MEMORY_PATH), { recursive: true });
+  const schema = await buildSchemaFromUrl(app.dbUrl);
 
-  // 4️⃣ Save fresh schema
-  fs.writeFileSync(
-    MEMORY_PATH,
-    JSON.stringify(schema, null, 2),
-    "utf-8"
-  );
+  // Save to cache
+  await prisma.connectedApp.update({
+    where: { id: appId },
+    data: {
+      schemaJson: JSON.stringify(schema),
+      schemaBuiltAt: new Date(),
+    },
+  });
 
   return schema;
 }

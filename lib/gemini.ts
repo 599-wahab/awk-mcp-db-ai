@@ -1,43 +1,58 @@
+// lib/gemini.ts
+import { GoogleGenAI } from "@google/genai";
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
 export async function askGemini(prompt: string): Promise<string> {
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: prompt }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0,
-            topP: 0.9
-          }
-        }),
-      }
-    );
+  const response = await ai.models.generateContent({
+    model: "gemini-2.0-flash",
+    contents: prompt,
+  });
+  return response.text ?? "";
+}
 
-    const data = await response.json();
+// Generate SQL from a natural language question
+export async function askGeminiForSQL(
+  question: string,
+  schemaJson: string
+): Promise<string> {
+  const prompt = `You are a PostgreSQL expert AI assistant.
 
-    if (!response.ok) {
-      console.error("Gemini API error:", data);
-      throw new Error(data?.error?.message || "Gemini API failed");
-    }
+Return ONLY a valid SELECT SQL query. No markdown, no explanation, no comments.
 
-    const text =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text;
+Database schema:
+${schemaJson}
 
-    if (!text) {
-      throw new Error("Empty response from Gemini");
-    }
+Rules:
+- Only SELECT queries
+- Always GROUP BY when aggregating  
+- ORDER BY ascending unless asked otherwise
+- Use DATE_TRUNC for time-based grouping
+- For stacked charts return: month, category, total_amount
+- Understand both Urdu and English questions
 
-    return text.trim();
-  } catch (error: any) {
-    console.error("Gemini Error:", error?.message || error);
-    throw new Error(error?.message || "Gemini failed to generate SQL.");
-  }
+User question: ${question}`;
+
+  const raw = await askGemini(prompt);
+  return raw.replace(/```sql/gi, "").replace(/```/g, "").trim();
+}
+
+// Generate a human-friendly explanation in the same language as the question
+export async function askGeminiForExplanation(
+  question: string,
+  result: any[]
+): Promise<string> {
+  const prompt = `You are a bilingual data analyst who speaks Urdu and English fluently.
+
+User asked: "${question}"
+Database result: ${JSON.stringify(result.slice(0, 15))}
+
+Instructions:
+- Detect if the question is in Urdu (including Roman Urdu) or English
+- Reply in the EXACT SAME language
+- Give a short, clear, friendly summary of what the data shows
+- Maximum 2-3 sentences
+- No technical terms, no SQL mentions`;
+
+  return await askGemini(prompt);
 }
