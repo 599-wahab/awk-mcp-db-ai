@@ -1,8 +1,8 @@
 // app/api/ai/route.ts
 import { prisma } from "@/lib/prisma";
-import { isSafeSQL } from "@/lib/sql-guard";
+import { isSafeSQL, cleanSQL } from "@/lib/sql-guard";
 import { getAppSchema } from "@/lib/memory/schema-loader";
-import { askGeminiForSQL, askGeminiForExplanation } from "@/lib/gemini";
+import { AIProviderFactory } from "@/lib/ai/factory";
 import { PrismaClient } from "@prisma/client";
 
 const CORS = {
@@ -15,11 +15,13 @@ export async function OPTIONS() {
   return new Response(null, { status: 200, headers: CORS });
 }
 
-function friendlyError(code: string): string {
-  if (code === "QUOTA_EXCEEDED") return "Gemini API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.";
-  if (code === "INVALID_KEY") return "Gemini API key is invalid. Check your key in Settings.";
-  if (code === "NO_KEY") return "No Gemini API key found. Add your key in Settings → select your app → paste Gemini key.";
-  return code.replace("AI_ERROR:", "AI error: ");
+function friendlyError(msg: string): { message: string; errorType: string } {
+  if (msg === "QUOTA_EXCEEDED") return { message: "AI API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.", errorType: "QUOTA_EXCEEDED" };
+  if (msg === "INVALID_KEY")    return { message: "AI API key is invalid. Check your key in Settings.", errorType: "INVALID_KEY" };
+  if (msg === "NO_KEY")         return { message: "No AI API key. Go to Settings → add your Gemini/OpenAI key.", errorType: "NO_KEY" };
+  if (msg === "MODEL_NOT_FOUND") return { message: "AI model not found. Update model name in Settings (e.g. gemini-1.5-flash).", errorType: "MODEL_NOT_FOUND" };
+  if (msg.includes("ECONNREFUSED")) return { message: "Cannot connect to local AI. Make sure LM Studio or Ollama is running.", errorType: "CONNECTION_ERROR" };
+  return { message: "AI error: " + msg.replace("AI_ERROR:", "").slice(0, 100), errorType: "AI_ERROR" };
 }
 
 function serialize(result: any[]) {
@@ -38,12 +40,12 @@ function detectViz(result: any[], q: string) {
   if (!result?.length) return "none";
   const ql = q.toLowerCase();
   if (ql.includes("stacked") || ql.includes("اسٹیکڈ")) return "stacked";
-  if (ql.includes("pie") || ql.includes("پائی")) return "pie";
-  if (ql.includes("bar") || ql.includes("بار")) return "bar";
-  if (ql.includes("line") || ql.includes("trend") || ql.includes("رجحان")) return "line";
+  if (ql.includes("pie")     || ql.includes("پائی"))   return "pie";
+  if (ql.includes("bar")     || ql.includes("بار"))    return "bar";
+  if (ql.includes("line")    || ql.includes("trend")   || ql.includes("رجحان")) return "line";
   const numKeys = Object.keys(result[0]).filter(k => typeof result[0][k] === "number");
   if (result.length === 1 && numKeys.length === 1) return "kpi";
-  if (result.length > 1 && numKeys.length >= 1) return "line";
+  if (result.length > 1  && numKeys.length >= 1)  return "line";
   return "table";
 }
 
@@ -60,7 +62,7 @@ function pivotStacked(result: any[]) {
 function getInsights(result: any[]) {
   if (!result?.length || result.length < 2) return [];
   const keys = Object.keys(result[0]);
-  const numKey = keys.find(k => typeof result[0][k] === "number");
+  const numKey   = keys.find(k => typeof result[0][k] === "number");
   const labelKey = keys.find(k => typeof result[0][k] !== "number");
   if (!numKey || !labelKey) return [];
   const sorted = [...result].sort((a, b) => b[numKey] - a[numKey]);
@@ -74,58 +76,90 @@ export async function POST(req: Request) {
   const apiKey = req.headers.get("x-api-key");
   if (!apiKey) return Response.json({ error: "API key required.", errorType: "NO_API_KEY" }, { status: 401, headers: CORS });
 
-  const app = await prisma.connectedApp.findUnique({ where: { apiKey } });
+  // Use explicit select so TypeScript knows about the new fields
+  const app = await prisma.connectedApp.findUnique({
+    where: { apiKey },
+    select: {
+      id: true,
+      isActive: true,
+      dbUrl: true,
+      geminiKey: true,
+      aiProvider: true,
+      aiModel: true,
+      aiBaseUrl: true,
+      schemaJson: true,
+      schemaBuiltAt: true,
+    },
+  });
+
   if (!app || !app.isActive) return Response.json({ error: "Invalid or inactive API key.", errorType: "INVALID_API_KEY" }, { status: 401, headers: CORS });
-  if (!app.dbUrl) return Response.json({ error: "No database URL set. Go to Settings and add your database connection string.", errorType: "NO_DB" }, { status: 400, headers: CORS });
+  if (!app.dbUrl)            return Response.json({ error: "No database URL. Add it in Settings.", errorType: "NO_DB" }, { status: 400, headers: CORS });
 
   const { question } = await req.json();
   if (!question?.trim()) return Response.json({ error: "Question is required." }, { status: 400, headers: CORS });
 
-  const geminiKey = app.geminiKey || null;
+  const providerType = (app.aiProvider || "GEMINI").toLowerCase();
+  const aiApiKey  = app.geminiKey  || undefined;
+  const aiBaseUrl = app.aiBaseUrl  || undefined;
+  const aiModel   = app.aiModel    || undefined;
+  const provider = AIProviderFactory.createProvider({ type: providerType as any });
+
   let schema: object = {};
   try { schema = await getAppSchema(app.id); } catch {}
 
+  // ── Generate SQL ──────────────────────────────────────────────────────────
   let sql: string;
   try {
-    sql = await askGeminiForSQL(question, JSON.stringify(schema), geminiKey);
+    const raw = await provider.generateSQL(question, JSON.stringify(schema), aiApiKey, aiBaseUrl, aiModel);
+    sql = cleanSQL(raw);   // ← strips backticks / markdown the AI may add
   } catch (err: any) {
-    return Response.json({ error: friendlyError(err.message), errorType: err.message }, { status: 500, headers: CORS });
+    const fe = friendlyError(err.message);
+    return Response.json({ error: fe.message, errorType: fe.errorType }, { status: 500, headers: CORS });
   }
 
-  if (!isSafeSQL(sql)) return Response.json({ error: "Unsafe SQL blocked." }, { status: 400, headers: CORS });
+  if (!isSafeSQL(sql)) {
+    console.error("Unsafe SQL blocked:", sql);
+    return Response.json({ error: "Unsafe SQL blocked.", errorType: "UNSAFE_SQL" }, { status: 400, headers: CORS });
+  }
 
   const userPrisma = new PrismaClient({ datasources: { db: { url: app.dbUrl } } });
 
   try {
-    const raw = await userPrisma.$queryRawUnsafe(sql) as any[];
-    let result = serialize(raw);
+    const raw2 = await userPrisma.$queryRawUnsafe(sql) as any[];
+    let result = serialize(raw2);
     const viz = detectViz(result, question);
     if (viz === "stacked") result = pivotStacked(result);
 
     let explanation = `Found ${result.length} result(s).`;
-    try { explanation = await askGeminiForExplanation(question, result, geminiKey); } catch {}
+    try { explanation = await provider.generateExplanation(question, result, aiApiKey, aiBaseUrl, aiModel); } catch {}
 
     await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: sql, result: JSON.stringify(result), explanation, wasSuccessful: true } }).catch(() => {});
     await prisma.connectedApp.update({ where: { id: app.id }, data: { totalChats: { increment: 1 }, lastActiveAt: new Date() } }).catch(() => {});
-
     return Response.json({ explanation, sql, result, visualization: viz, insights: getInsights(result) }, { headers: CORS });
 
   } catch (err: any) {
+    // Auto-fix
     try {
-      const fixedSql = await askGeminiForSQL(`Fix this failing SQL:\n${sql}\nError: ${err.message}\nReturn only corrected SELECT SQL.`, JSON.stringify(schema), geminiKey);
+      const rawFixed = await provider.fixSQL(sql, err.message, JSON.stringify(schema), aiApiKey, aiBaseUrl, aiModel);
+      const fixedSql = cleanSQL(rawFixed);
       if (!isSafeSQL(fixedSql)) throw new Error("Fixed SQL unsafe");
-      const raw = await userPrisma.$queryRawUnsafe(fixedSql) as any[];
-      let result = serialize(raw);
+
+      const raw2 = await userPrisma.$queryRawUnsafe(fixedSql) as any[];
+      let result = serialize(raw2);
       const viz = detectViz(result, question);
       if (viz === "stacked") result = pivotStacked(result);
+
       let explanation = `Found ${result.length} result(s).`;
-      try { explanation = await askGeminiForExplanation(question, result, geminiKey); } catch {}
+      try { explanation = await provider.generateExplanation(question, result, aiApiKey, aiBaseUrl, aiModel); } catch {}
+
       await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: fixedSql, result: JSON.stringify(result), explanation, wasSuccessful: true } }).catch(() => {});
       await prisma.connectedApp.update({ where: { id: app.id }, data: { totalChats: { increment: 1 }, lastActiveAt: new Date() } }).catch(() => {});
       return Response.json({ explanation, sql: fixedSql, result, visualization: viz, insights: getInsights(result) }, { headers: CORS });
+
     } catch (fixErr: any) {
       await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: sql, wasSuccessful: false } }).catch(() => {});
-      return Response.json({ error: friendlyError(fixErr.message), errorType: fixErr.message }, { status: 500, headers: CORS });
+      const fe = friendlyError(fixErr.message);
+      return Response.json({ error: fe.message, errorType: fe.errorType }, { status: 500, headers: CORS });
     }
   } finally {
     await userPrisma.$disconnect();

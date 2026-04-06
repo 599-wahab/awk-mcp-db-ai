@@ -85,8 +85,19 @@ model ConnectedApp {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   chatLogs      ChatLog[]
+  aiProvider    AIProviderType @default(GEMINI)
+  aiModel       String?
+  aiBaseUrl     String?
 
   @@map("connected_apps")
+}
+
+enum AIProviderType {
+  GEMINI
+  OPENAI
+  ANTHROPIC
+  LMSTUDIO
+  OLLAMA
 }
 
 enum DbType {

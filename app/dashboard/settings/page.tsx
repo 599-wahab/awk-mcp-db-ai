@@ -1,7 +1,5 @@
+// app/dashboard/settings/page.tsx
 "use client";
-// app/settings/page.tsx
-// AWK TLD BOT — Settings page (black/lime theme)
-
 import { useState, useEffect } from "react";
 
 interface App {
@@ -10,13 +8,38 @@ interface App {
   apiKey: string;
   geminiKey?: string;
   dbType: string;
+  aiProvider: string;
+  aiModel?: string;
+  aiBaseUrl?: string;
 }
+
+const AI_PROVIDERS = [
+  {  
+    value: "GEMINI", 
+    label: "Google Gemini", 
+    needsKey: true, 
+    defaultModel: "gemini-3-flash-preview",
+    defaultUrl: "https://generativelanguage.googleapis.com/v1beta",
+    models: [
+      "gemini-3-flash-preview",
+      "gemini-2.0-flash-exp",
+      "gemini-1.0-pro"
+    ]
+  },
+  { value: "OPENAI", label: "OpenAI (ChatGPT)", needsKey: true, defaultModel: "gpt-3.5-turbo", defaultUrl: "https://api.openai.com/v1" },
+  { value: "ANTHROPIC", label: "Anthropic Claude", needsKey: true, defaultModel: "claude-3-haiku-20240307", defaultUrl: "https://api.anthropic.com" },
+  { value: "LMSTUDIO", label: "LM Studio (Local)", needsKey: false, defaultModel: "local-model", defaultUrl: "http://localhost:1234/v1" },
+  { value: "OLLAMA", label: "Ollama (Local)", needsKey: false, defaultModel: "llama2", defaultUrl: "http://localhost:11434" },
+];
 
 export default function SettingsPage() {
   const [apps, setApps] = useState<App[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [dbUrl, setDbUrl] = useState("");
-  const [geminiKey, setGeminiKey] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [aiProvider, setAiProvider] = useState("GEMINI");
+  const [aiModel, setAiModel] = useState("");
+  const [aiBaseUrl, setAiBaseUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -28,7 +51,10 @@ export default function SettingsPage() {
         if (Array.isArray(data) && data.length > 0) {
           setApps(data);
           setSelectedId(data[0].id);
-          setGeminiKey(data[0].geminiKey || "");
+          setApiKey(data[0].geminiKey || "");
+          setAiProvider(data[0].aiProvider || "GEMINI");
+          setAiModel(data[0].aiModel || "");
+          setAiBaseUrl(data[0].aiBaseUrl || "");
         }
       })
       .catch(() => {});
@@ -40,10 +66,23 @@ export default function SettingsPage() {
       .then(r => r.json())
       .then(data => {
         setDbUrl(data.dbUrl || "");
-        setGeminiKey(data.geminiKey || "");
+        setApiKey(data.apiKey || "");
+        setAiProvider(data.aiProvider || "GEMINI");
+        setAiModel(data.aiModel || "");
+        setAiBaseUrl(data.aiBaseUrl || "");
       })
       .catch(() => {});
   }, [selectedId]);
+
+  const selectedProvider = AI_PROVIDERS.find(p => p.value === aiProvider);
+  
+  // Auto-fill defaults when provider changes
+  useEffect(() => {
+    if (selectedProvider) {
+      if (!aiModel) setAiModel(selectedProvider.defaultModel);
+      if (!aiBaseUrl) setAiBaseUrl(selectedProvider.defaultUrl);
+    }
+  }, [aiProvider, selectedProvider]);
 
   async function handleSave() {
     if (!selectedId) { setError("Please select an app first."); return; }
@@ -52,7 +91,14 @@ export default function SettingsPage() {
     const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ appId: selectedId, dbUrl, geminiKey }),
+      body: JSON.stringify({ 
+        appId: selectedId, 
+        dbUrl, 
+        apiKey,
+        aiProvider,
+        aiModel,
+        aiBaseUrl,
+      }),
     });
     const data = await res.json();
     if (data.success) { setSaved(true); setTimeout(() => setSaved(false), 3000); }
@@ -66,23 +112,21 @@ export default function SettingsPage() {
     <div className="max-w-2xl space-y-8" style={{ fontFamily: "'DM Sans',sans-serif" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');.fd{font-family:'Bebas Neue',sans-serif;}.fm{font-family:'Space Mono',monospace;}`}</style>
 
-      {/* Header */}
       <div>
         <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest mb-2">// Settings</div>
         <h1 className="fd text-4xl tracking-wide text-white">APP SETTINGS</h1>
-        <p className="text-[#5a5a5a] text-sm mt-1">Configure your database connection and AI key for each connected app.</p>
+        <p className="text-[#5a5a5a] text-sm mt-1">Configure your database connection and AI provider for each connected app.</p>
       </div>
 
-      {/* How it works note */}
       <div className="border border-[#e8ff47]/20 bg-[#e8ff47]/5 p-4 rounded-none">
-        <p className="fm text-xs text-[#e8ff47] uppercase tracking-wider mb-2">// How it works</p>
-        <ul className="space-y-1 text-sm text-[#5a5a5a]">
-          <li>1. Select the app you want to configure below</li>
-          <li>2. Paste your <span className="text-white font-medium">Database URL</span> (NeonDB, Supabase, Railway, etc.)</li>
-          <li>3. Paste your <span className="text-white font-medium">Gemini API Key</span> from <span className="text-[#e8ff47]">aistudio.google.com</span></li>
-          <li>4. Save — then go to <span className="text-white font-medium">Connected Apps</span> and click <span className="text-[#e8ff47]">Rebuild Schema</span></li>
-          <li>5. Come back to <span className="text-white font-medium">AI Chat</span> and start asking questions!</li>
-        </ul>
+        <p className="fm text-xs text-[#e8ff47] uppercase tracking-wider mb-2">// Supported AI Providers</p>
+        <div className="grid grid-cols-2 gap-2 text-sm text-[#5a5a5a]">
+          <div>✓ Google Gemini (Free tier available)</div>
+          <div>✓ OpenAI ChatGPT (GPT-3.5/4)</div>
+          <div>✓ Anthropic Claude</div>
+          <div>✓ LM Studio (Local - Free)</div>
+          <div>✓ Ollama (Local - Free)</div>
+        </div>
       </div>
 
       {apps.length === 0 ? (
@@ -92,7 +136,6 @@ export default function SettingsPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {/* App selector */}
           <div>
             <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-2">Select App</label>
             <select
@@ -123,7 +166,6 @@ export default function SettingsPage() {
                       Copy
                     </button>
                   </div>
-                  <p className="fm text-[10px] text-[#3a3a3a] mt-1">// Use this key in your ERP's embed script</p>
                 </div>
 
                 {/* Database URL */}
@@ -135,27 +177,67 @@ export default function SettingsPage() {
                     rows={3}
                     placeholder="postgresql://user:password@ep-xxx.neon.tech/dbname?sslmode=require"
                     className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors resize-none font-mono"
-                    dir="ltr"
                   />
-                  <p className="fm text-[10px] text-[#3a3a3a] mt-1">// NeonDB, Supabase, Railway, or any PostgreSQL connection string</p>
                 </div>
 
-                {/* Gemini Key */}
+                {/* AI Provider Selection */}
                 <div>
-                  <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Gemini API Key *</label>
-                  <input
-                    type="password"
-                    value={geminiKey}
-                    onChange={e => setGeminiKey(e.target.value)}
-                    placeholder="AIzaSy..."
+                  <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">AI Provider *</label>
+                  <select
+                    value={aiProvider}
+                    onChange={e => setAiProvider(e.target.value)}
                     className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
-                    dir="ltr"
+                  >
+                    {AI_PROVIDERS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* AI Model (optional - override default) */}
+                <div>
+                  <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">AI Model (optional)</label>
+                  <input
+                    value={aiModel}
+                    onChange={e => setAiModel(e.target.value)}
+                    placeholder={selectedProvider?.defaultModel}
+                    className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
+                  />
+                  <p className="fm text-[10px] text-[#3a3a3a] mt-1">Leave empty to use default: {selectedProvider?.defaultModel}</p>
+                </div>
+
+                {/* AI Base URL (for local/LM Studio/Ollama) */}
+                <div>
+                  <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">API Base URL (optional)</label>
+                  <input
+                    value={aiBaseUrl}
+                    onChange={e => setAiBaseUrl(e.target.value)}
+                    placeholder={selectedProvider?.defaultUrl}
+                    className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
                   />
                   <p className="fm text-[10px] text-[#3a3a3a] mt-1">
-                    // Get free key from{" "}
-                    <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="text-[#e8ff47] hover:underline">aistudio.google.com</a>
+                    For LM Studio: http://localhost:1234/v1 | Ollama: http://localhost:11434
                   </p>
                 </div>
+
+                {/* API Key (only for providers that need it) */}
+                {selectedProvider?.needsKey && (
+                  <div>
+                    <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">API Key *</label>
+                    <input
+                      type="password"
+                      value={apiKey}
+                      onChange={e => setApiKey(e.target.value)}
+                      placeholder={aiProvider === "GEMINI" ? "AIzaSy..." : "sk-..."}
+                      className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
+                    />
+                    <p className="fm text-[10px] text-[#3a3a3a] mt-1">
+                      {aiProvider === "GEMINI" && "Get free key from aistudio.google.com"}
+                      {aiProvider === "OPENAI" && "Get key from platform.openai.com"}
+                      {aiProvider === "ANTHROPIC" && "Get key from console.anthropic.com"}
+                    </p>
+                  </div>
+                )}
 
                 {error && (
                   <div className="border border-red-500/30 bg-red-500/10 px-4 py-2">
@@ -180,21 +262,30 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Next steps */}
+      {/* Local Setup Instructions */}
       <div className="border-t border-[#1e1e1e] pt-6">
-        <p className="fm text-xs text-[#3a3a3a] uppercase tracking-wider mb-3">// After saving</p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {[
-            { num: "01", title: "Rebuild Schema", desc: "Go to Connected Apps → Rebuild Schema", href: "/dashboard/widget-sites" },
-            { num: "02", title: "Test Chat", desc: "Go to AI Chat and ask a question", href: "/dashboard" },
-            { num: "03", title: "Embed Widget", desc: "Copy the script tag and paste in your ERP", href: "/dashboard/widget-sites" },
-          ].map(s => (
-            <a key={s.num} href={s.href} className="border border-[#1e1e1e] p-4 hover:border-[#e8ff47] transition-colors group">
-              <div className="fd text-3xl text-[#1e1e1e] group-hover:text-[#e8ff47] transition-colors mb-2">{s.num}</div>
-              <p className="text-sm font-medium text-white mb-1">{s.title}</p>
-              <p className="fm text-[10px] text-[#5a5a5a]">{s.desc}</p>
-            </a>
-          ))}
+        <p className="fm text-xs text-[#3a3a3a] uppercase tracking-wider mb-3">// Local AI Setup (LM Studio / Ollama)</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="border border-[#1e1e1e] p-4">
+            <p className="fd text-lg text-[#e8ff47] mb-2">LM Studio</p>
+            <ol className="space-y-2 text-sm text-[#5a5a5a] list-decimal list-inside">
+              <li>Download LM Studio from lmstudio.ai</li>
+              <li>Download a model (e.g., Gemma, Llama, Phi)</li>
+              <li>Start the local inference server</li>
+              <li>Set Base URL to http://localhost:1234/v1</li>
+              <li>Set Model to your downloaded model name</li>
+            </ol>
+          </div>
+          <div className="border border-[#1e1e1e] p-4">
+            <p className="fd text-lg text-[#e8ff47] mb-2">Ollama</p>
+            <ol className="space-y-2 text-sm text-[#5a5a5a] list-decimal list-inside">
+              <li>Install Ollama from ollama.ai</li>
+              <li>Run: ollama pull llama2 (or gemma:2b)</li>
+              <li>Ollama runs on http://localhost:11434</li>
+              <li>Set Model to your downloaded model name</li>
+              <li>No API key required</li>
+            </ol>
+          </div>
         </div>
       </div>
     </div>
