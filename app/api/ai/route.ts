@@ -16,12 +16,19 @@ export async function OPTIONS() {
 }
 
 function friendlyError(msg: string): { message: string; errorType: string } {
-  if (msg === "QUOTA_EXCEEDED") return { message: "AI API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.", errorType: "QUOTA_EXCEEDED" };
-  if (msg === "INVALID_KEY")    return { message: "AI API key is invalid. Check your key in Settings.", errorType: "INVALID_KEY" };
-  if (msg === "NO_KEY")         return { message: "No AI API key. Go to Settings → add your Gemini/OpenAI key.", errorType: "NO_KEY" };
-  if (msg === "MODEL_NOT_FOUND") return { message: "AI model not found. Update model name in Settings (e.g. gemini-1.5-flash).", errorType: "MODEL_NOT_FOUND" };
+  if (msg === "QUOTA_EXCEEDED")   return { message: "AI API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.", errorType: "QUOTA_EXCEEDED" };
+  if (msg === "INVALID_KEY")      return { message: "AI API key is invalid. Check your key in Settings.", errorType: "INVALID_KEY" };
+  if (msg === "NO_KEY")           return { message: "No AI API key. Go to Settings → add your Gemini/OpenAI key.", errorType: "NO_KEY" };
+  if (msg === "MODEL_NOT_FOUND")  return { message: "AI model not found. Update model name in Settings (e.g. gemini-1.5-flash).", errorType: "MODEL_NOT_FOUND" };
   if (msg.includes("ECONNREFUSED")) return { message: "Cannot connect to local AI. Make sure LM Studio or Ollama is running.", errorType: "CONNECTION_ERROR" };
   return { message: "AI error: " + msg.replace("AI_ERROR:", "").slice(0, 100), errorType: "AI_ERROR" };
+}
+
+// Detect language — Urdu script OR common Roman Urdu words
+function detectLang(text: string): "ur" | "en" {
+  if (/[\u0600-\u06FF]/.test(text)) return "ur";
+  if (/\b(kya|hai|hain|aap|mujhe|batao|dikhao|kitne|kitni|total|salary|order|sale)\b/i.test(text)) return "ur";
+  return "en";
 }
 
 function serialize(result: any[]) {
@@ -59,13 +66,19 @@ function pivotStacked(result: any[]) {
   return Object.values(map);
 }
 
-function getInsights(result: any[]) {
+function getInsights(result: any[], lang: "ur" | "en") {
   if (!result?.length || result.length < 2) return [];
   const keys = Object.keys(result[0]);
   const numKey   = keys.find(k => typeof result[0][k] === "number");
   const labelKey = keys.find(k => typeof result[0][k] !== "number");
   if (!numKey || !labelKey) return [];
   const sorted = [...result].sort((a, b) => b[numKey] - a[numKey]);
+  if (lang === "ur") {
+    return [
+      `${sorted[0][labelKey]} کی سب سے زیادہ قدر ہے (${Number(sorted[0][numKey]).toLocaleString()})۔`,
+      `${sorted[sorted.length - 1][labelKey]} کی سب سے کم قدر ہے (${Number(sorted[sorted.length - 1][numKey]).toLocaleString()})۔`,
+    ];
+  }
   return [
     `${sorted[0][labelKey]} has the highest value (${Number(sorted[0][numKey]).toLocaleString()}).`,
     `${sorted[sorted.length - 1][labelKey]} has the lowest value (${Number(sorted[sorted.length - 1][numKey]).toLocaleString()}).`,
@@ -76,42 +89,39 @@ export async function POST(req: Request) {
   const apiKey = req.headers.get("x-api-key");
   if (!apiKey) return Response.json({ error: "API key required.", errorType: "NO_API_KEY" }, { status: 401, headers: CORS });
 
-  // Use explicit select so TypeScript knows about the new fields
   const app = await prisma.connectedApp.findUnique({
     where: { apiKey },
     select: {
-      id: true,
-      isActive: true,
-      dbUrl: true,
-      geminiKey: true,
-      aiProvider: true,
-      aiModel: true,
-      aiBaseUrl: true,
-      schemaJson: true,
-      schemaBuiltAt: true,
+      id: true, isActive: true, dbUrl: true,
+      geminiKey: true, aiProvider: true, aiModel: true, aiBaseUrl: true,
+      schemaJson: true, schemaBuiltAt: true,
     },
   });
 
   if (!app || !app.isActive) return Response.json({ error: "Invalid or inactive API key.", errorType: "INVALID_API_KEY" }, { status: 401, headers: CORS });
   if (!app.dbUrl)            return Response.json({ error: "No database URL. Add it in Settings.", errorType: "NO_DB" }, { status: 400, headers: CORS });
 
-  const { question } = await req.json();
+  const { question, preferredLang } = await req.json();
   if (!question?.trim()) return Response.json({ error: "Question is required." }, { status: 400, headers: CORS });
 
+  // Detect language — prefer user's setting, fall back to auto-detect
+  const detectedLang = preferredLang === "ur" ? "ur"
+                     : preferredLang === "en" ? "en"
+                     : detectLang(question);
+
   const providerType = (app.aiProvider || "GEMINI").toLowerCase();
-  const aiApiKey  = app.geminiKey  || undefined;
-  const aiBaseUrl = app.aiBaseUrl  || undefined;
-  const aiModel   = app.aiModel    || undefined;
+  const aiApiKey  = app.geminiKey || undefined;
+  const aiBaseUrl = app.aiBaseUrl || undefined;
+  const aiModel   = app.aiModel   || undefined;
   const provider = AIProviderFactory.createProvider({ type: providerType as any });
 
   let schema: object = {};
   try { schema = await getAppSchema(app.id); } catch {}
 
-  // ── Generate SQL ──────────────────────────────────────────────────────────
   let sql: string;
   try {
     const raw = await provider.generateSQL(question, JSON.stringify(schema), aiApiKey, aiBaseUrl, aiModel);
-    sql = cleanSQL(raw);   // ← strips backticks / markdown the AI may add
+    sql = cleanSQL(raw);
   } catch (err: any) {
     const fe = friendlyError(err.message);
     return Response.json({ error: fe.message, errorType: fe.errorType }, { status: 500, headers: CORS });
@@ -130,15 +140,30 @@ export async function POST(req: Request) {
     const viz = detectViz(result, question);
     if (viz === "stacked") result = pivotStacked(result);
 
-    let explanation = `Found ${result.length} result(s).`;
-    try { explanation = await provider.generateExplanation(question, result, aiApiKey, aiBaseUrl, aiModel); } catch {}
+    // Generate explanation in detected language
+    let explanation = detectedLang === "ur" ? `${result.length} نتائج ملے۔` : `Found ${result.length} result(s).`;
+    try {
+      explanation = await provider.generateExplanation(
+        detectedLang === "ur" ? `${question}\n\nجواب اردو میں دیں۔` : question,
+        result, aiApiKey, aiBaseUrl, aiModel
+      );
+    } catch {}
 
-    await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: sql, result: JSON.stringify(result), explanation, wasSuccessful: true } }).catch(() => {});
+    const log = await prisma.chatLog.create({
+      data: { appId: app.id, question, generatedSql: sql, result: JSON.stringify(result), explanation, wasSuccessful: true, detectedLang },
+    }).catch(() => null);
+
     await prisma.connectedApp.update({ where: { id: app.id }, data: { totalChats: { increment: 1 }, lastActiveAt: new Date() } }).catch(() => {});
-    return Response.json({ explanation, sql, result, visualization: viz, insights: getInsights(result) }, { headers: CORS });
+
+    return Response.json({
+      explanation, sql, result,
+      visualization: viz,
+      insights: getInsights(result, detectedLang),
+      detectedLang,
+      chatLogId: log?.id,
+    }, { headers: CORS });
 
   } catch (err: any) {
-    // Auto-fix
     try {
       const rawFixed = await provider.fixSQL(sql, err.message, JSON.stringify(schema), aiApiKey, aiBaseUrl, aiModel);
       const fixedSql = cleanSQL(rawFixed);
@@ -149,15 +174,30 @@ export async function POST(req: Request) {
       const viz = detectViz(result, question);
       if (viz === "stacked") result = pivotStacked(result);
 
-      let explanation = `Found ${result.length} result(s).`;
-      try { explanation = await provider.generateExplanation(question, result, aiApiKey, aiBaseUrl, aiModel); } catch {}
+      let explanation = detectedLang === "ur" ? `${result.length} نتائج ملے۔` : `Found ${result.length} result(s).`;
+      try {
+        explanation = await provider.generateExplanation(
+          detectedLang === "ur" ? `${question}\n\nجواب اردو میں دیں۔` : question,
+          result, aiApiKey, aiBaseUrl, aiModel
+        );
+      } catch {}
 
-      await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: fixedSql, result: JSON.stringify(result), explanation, wasSuccessful: true } }).catch(() => {});
+      const log = await prisma.chatLog.create({
+        data: { appId: app.id, question, generatedSql: fixedSql, result: JSON.stringify(result), explanation, wasSuccessful: true, detectedLang },
+      }).catch(() => null);
+
       await prisma.connectedApp.update({ where: { id: app.id }, data: { totalChats: { increment: 1 }, lastActiveAt: new Date() } }).catch(() => {});
-      return Response.json({ explanation, sql: fixedSql, result, visualization: viz, insights: getInsights(result) }, { headers: CORS });
+
+      return Response.json({
+        explanation, sql: fixedSql, result,
+        visualization: viz,
+        insights: getInsights(result, detectedLang),
+        detectedLang,
+        chatLogId: log?.id,
+      }, { headers: CORS });
 
     } catch (fixErr: any) {
-      await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: sql, wasSuccessful: false } }).catch(() => {});
+      await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: sql, wasSuccessful: false, detectedLang } }).catch(() => {});
       const fe = friendlyError(fixErr.message);
       return Response.json({ error: fe.message, errorType: fe.errorType }, { status: 500, headers: CORS });
     }
