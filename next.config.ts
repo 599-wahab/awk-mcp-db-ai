@@ -12,12 +12,29 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // AI API — allow cross-origin requests from embedded widget
+        // AI API — allow cross-origin requests from ERP widget + embedded widget
         source: "/api/ai",
         headers: [
           { key: "Access-Control-Allow-Origin", value: "*" },
-          { key: "Access-Control-Allow-Methods", value: "POST, OPTIONS" },
-          { key: "Access-Control-Allow-Headers", value: "Content-Type, x-api-key" },
+          { key: "Access-Control-Allow-Methods", value: "GET, POST, OPTIONS" },
+          {
+            key: "Access-Control-Allow-Headers",
+            value: "Content-Type, x-api-key, X-API-Key, x-user-id, X-User-Id, x-user-email, X-User-Email",
+          },
+          { key: "Access-Control-Max-Age", value: "86400" },
+        ],
+      },
+      {
+        // All other API routes — broad CORS coverage
+        source: "/api/:path*",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Access-Control-Allow-Methods", value: "GET, POST, OPTIONS" },
+          {
+            key: "Access-Control-Allow-Headers",
+            value: "Content-Type, x-api-key, X-API-Key, x-user-id, X-User-Id, x-user-email, X-User-Email",
+          },
+          { key: "Access-Control-Max-Age", value: "86400" },
         ],
       },
     ];

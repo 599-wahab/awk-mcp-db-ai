@@ -1,19 +1,20 @@
 # AWKT-LD Upgrade — Setup Guide
+
 ## اردو + English | Voice + Widget + Auth + Multi-App
 
 ---
 
 ## What was added
 
-| Feature | Files |
-|---|---|
-| Claude AI (replaces Gemini) | `lib/claude.ts`, `app/api/ai/route.ts` |
-| Urdu + English voice input | `lib/voice.ts`, `app/api/voice/stt/route.ts` |
-| Urdu voice output (TTS) | `app/api/voice/tts/route.ts` |
-| Login / auth dashboard | `lib/auth.ts`, `app/login/page.tsx`, `app/dashboard/layout.tsx` |
-| Popup widget (embed.js) | `public/embed.js`, `app/widget/page.tsx` |
-| Multi-app registration | `app/api/widget/register/route.ts`, `app/dashboard/widget-sites/page.tsx` |
-| Route protection | `middleware.ts` |
+| Feature                     | Files                                                                     |
+| --------------------------- | ------------------------------------------------------------------------- |
+| Claude AI (replaces Gemini) | `lib/claude.ts`, `app/api/ai/route.ts`                                    |
+| Urdu + English voice input  | `lib/voice.ts`, `app/api/voice/stt/route.ts`                              |
+| Urdu voice output (TTS)     | `app/api/voice/tts/route.ts`                                              |
+| Login / auth dashboard      | `lib/auth.ts`, `app/login/page.tsx`, `app/dashboard/layout.tsx`           |
+| Popup widget (embed.js)     | `public/embed.js`, `app/widget/page.tsx`                                  |
+| Multi-app registration      | `app/api/widget/register/route.ts`, `app/dashboard/widget-sites/page.tsx` |
+| Route protection            | `middleware.ts`                                                           |
 
 ---
 
@@ -25,6 +26,7 @@ npm install -D @types/bcryptjs
 ```
 
 Remove the old Gemini package:
+
 ```bash
 npm uninstall @google/genai
 ```
@@ -109,10 +111,30 @@ Vercel will auto-deploy. Make sure all env vars are set in Vercel dashboard.
 5. Paste it in your other app's HTML before `</body>`:
 
 ```html
-<script src="https://your-awkt-app.vercel.app/embed.js"
-        data-site-id="abc123def456...">
-</script>
+<script
+  src="https://your-awkt-app.vercel.app/embed.js"
+  data-api-key="abc123def456..."
+></script>
 ```
+
+### Optional: Pass User Identity for Auto-Recognition
+
+To have the widget recognize the logged-in ERP user, add user attributes:
+
+```html
+<script
+  src="https://your-awkt-app.vercel.app/embed.js"
+  data-api-key="abc123def456..."
+  data-user-id="USER_ID_FROM_YOUR_ERP"
+  data-user-email="user@company.com"
+></script>
+```
+
+This enables:
+
+- Personalized welcome message ("Welcome back, user@company.com!")
+- User context passed to AI for better responses
+- Chat history tied to the specific user
 
 A floating chat button will appear on that site. When clicked, it opens the
 full AWKT-LD chat widget — supporting Urdu voice + English, connected to your
@@ -123,6 +145,7 @@ database.
 ## How voice works
 
 ### Voice input (اردو بولیں)
+
 1. User holds the mic button
 2. Browser records audio via `MediaRecorder`
 3. Audio sent to `/api/voice/stt` → OpenAI Whisper
@@ -130,6 +153,7 @@ database.
 5. Text is sent to Claude as the question
 
 ### Voice output (AI جواب بولتا ہے)
+
 1. Claude returns the explanation in Urdu/English
 2. Text detected as Urdu or English automatically
 3. Sent to `/api/voice/tts` → Google Cloud TTS
@@ -186,8 +210,11 @@ Your browser will still prompt for microphone permission on first use.
 
 **Urdu text not rendering correctly:**
 Add `dir="auto"` to your message containers in `MessageBubble.tsx`:
+
 ```tsx
-<p dir="auto" className="mb-2 whitespace-pre-wrap">{message.content}</p>
+<p dir="auto" className="mb-2 whitespace-pre-wrap">
+  {message.content}
+</p>
 ```
 
 **Widget not showing on external site:**
@@ -199,6 +226,3 @@ production domain.
 Make sure you're using `askClaudeForExplanation` (not `askClaudeForSQL`) for
 the human-readable response. The SQL route always returns English SQL, but the
 explanation route detects language and responds accordingly.
-
-
-

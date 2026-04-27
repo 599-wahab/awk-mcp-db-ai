@@ -128,7 +128,7 @@ export default function SettingsPage() {
   const INPUT = "w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors";
 
   return (
-    <div className="max-w-2xl space-y-8 pb-12" style={{ fontFamily: "'DM Sans',sans-serif" }}>
+    <div className="h-full overflow-y-auto"><div className="max-w-2xl space-y-8 pb-12 p-4 md:p-6" style={{ fontFamily: "'DM Sans',sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
         .fd{font-family:'Bebas Neue',sans-serif;} .fm{font-family:'Space Mono',monospace;}
@@ -454,5 +454,6 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
+  </div>
   );
 }

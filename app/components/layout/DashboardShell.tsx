@@ -17,16 +17,18 @@ export default function DashboardShell({
   session: any;
 }) {
   const pathname = usePathname();
-  const [status, setStatus] = useState({ database: false, ai: false });
+  const [status, setStatus]     = useState({ database: false, ai: false });
   const [menuOpen, setMenuOpen] = useState(false);
-  const [lang, setLang] = useState("auto");
+  const [lang, setLang]         = useState("auto"); // "auto" | "ur" | "en"
 
   useEffect(() => {
+    // Load user language preference
     fetch("/api/user-preferences")
       .then(r => r.json())
       .then(d => { if (d.preferredLang) setLang(d.preferredLang); })
       .catch(() => {});
 
+    // Health check every 30s
     const check = () => fetch("/api/health").then(r => r.json()).then(setStatus).catch(() => {});
     check();
     const t = setInterval(check, 30000);
@@ -36,15 +38,15 @@ export default function DashboardShell({
   const isUr = lang === "ur";
 
   return (
-    <div className="h-screen bg-black text-white flex flex-col overflow-hidden" style={{ fontFamily: "'DM Sans',sans-serif" }}>
+    <div className="min-h-screen bg-black text-white flex flex-col" style={{ fontFamily: "'DM Sans',sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
         .fd{font-family:'Bebas Neue',sans-serif;}
         .fm{font-family:'Space Mono',monospace;}
       `}</style>
 
-      {/* Header - fixed, no scroll */}
-      <header className="border-b border-[#1e1e1e] bg-black px-4 py-3 flex items-center justify-between shrink-0">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <header className="border-b border-[#1e1e1e] bg-black px-4 py-3 flex items-center justify-between shrink-0 sticky top-0 z-40">
         <div className="flex items-center gap-3">
           <button
             className="md:hidden text-[#5a5a5a] p-1 text-xl leading-none"
@@ -57,6 +59,7 @@ export default function DashboardShell({
         </div>
 
         <div className="flex items-center gap-2 fm text-[10px]">
+          {/* DB status */}
           <span className={`px-2 py-1 border transition-colors ${
             status.database
               ? "border-green-500/40 text-green-400"
@@ -64,6 +67,7 @@ export default function DashboardShell({
           }`}>
             DB {status.database ? "●" : "○"}
           </span>
+          {/* AI status */}
           <span className={`px-2 py-1 border transition-colors ${
             status.ai
               ? "border-green-500/40 text-green-400"
@@ -71,6 +75,7 @@ export default function DashboardShell({
           }`}>
             AI {status.ai ? "●" : "○"}
           </span>
+
           <span className="text-[#3a3a3a] hidden sm:block truncate max-w-[100px]">
             {session?.user?.name || session?.user?.email}
           </span>
@@ -83,12 +88,11 @@ export default function DashboardShell({
         </div>
       </header>
 
-      {/* Main content area - ONE scrollbar here */}
       <div className="flex flex-1 overflow-hidden relative">
-        {/* ONLY ONE SIDEBAR */}
+        {/* ── Sidebar ──────────────────────────────────────────────────────── */}
         <aside className={`
           ${menuOpen ? "flex" : "hidden"} md:flex
-          w-64 border-r border-[#1e1e1e] bg-black flex-col py-6 px-3 shrink-0
+          w-52 border-r border-[#1e1e1e] bg-black flex-col py-6 px-3 shrink-0
           absolute md:relative z-30 top-0 left-0 h-full md:h-auto
         `}>
           <nav className="space-y-1">
@@ -120,7 +124,7 @@ export default function DashboardShell({
           </div>
         </aside>
 
-        {/* Mobile overlay */}
+        {/* Overlay on mobile when sidebar open */}
         {menuOpen && (
           <div
             className="fixed inset-0 bg-black/60 z-20 md:hidden"
@@ -128,10 +132,7 @@ export default function DashboardShell({
           />
         )}
 
-        {/* Main content - THIS is where scrolling happens (ONCE) */}
-        <main className="flex-1 overflow-auto">
-          {children}
-        </main>
+        <main className="flex-1 overflow-hidden min-h-0">{children}</main>
       </div>
     </div>
   );

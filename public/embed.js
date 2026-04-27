@@ -1,5 +1,7 @@
 // public/embed.js
 // Paste this in ANY app: <script src="https://your-awkt.vercel.app/embed.js" data-api-key="YOUR_KEY"></script>
+// Optional: Pass user info for auto-recognition
+// <script src="..." data-api-key="YOUR_KEY" data-user-id="123" data-user-email="user@erp.com"></script>
 
 (function () {
   "use strict";
@@ -9,8 +11,15 @@
 
   var tag = document.currentScript;
   var API_KEY = tag ? tag.getAttribute("data-api-key") : "";
+  var USER_ID = tag ? tag.getAttribute("data-user-id") || "" : "";
+  var USER_EMAIL = tag ? tag.getAttribute("data-user-email") || "" : "";
   var BASE = tag ? new URL(tag.src).origin : "";
-  var WIDGET = BASE + "/widget?key=" + encodeURIComponent(API_KEY);
+  var WIDGET =
+    BASE +
+    "/widget?key=" +
+    encodeURIComponent(API_KEY) +
+    (USER_ID ? "&userId=" + encodeURIComponent(USER_ID) : "") +
+    (USER_EMAIL ? "&userEmail=" + encodeURIComponent(USER_EMAIL) : "");
 
   // Styles
   var style = document.createElement("style");
@@ -33,7 +42,8 @@
   var btn = document.createElement("button");
   btn.id = "_awkt-btn";
   btn.setAttribute("aria-label", "Open AI chat assistant");
-  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  btn.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
   document.body.appendChild(btn);
 
   // Iframe wrap
@@ -50,13 +60,18 @@
   var open = false;
   var loaded = false;
 
-  var ICON_CHAT = '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>';
-  var ICON_X = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
+  var ICON_CHAT =
+    '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>';
+  var ICON_X =
+    '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
 
   function toggle() {
     open = !open;
     if (open) {
-      if (!loaded) { iframe.src = WIDGET; loaded = true; }
+      if (!loaded) {
+        iframe.src = WIDGET;
+        loaded = true;
+      }
       wrap.classList.add("on");
       btn.style.background = "#3730a3";
       btn.querySelector("svg").innerHTML = ICON_X;
@@ -67,7 +82,10 @@
     }
   }
 
-  btn.addEventListener("click", function (e) { e.stopPropagation(); toggle(); });
+  btn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    toggle();
+  });
 
   document.addEventListener("click", function (e) {
     if (open && !wrap.contains(e.target) && e.target !== btn) toggle();
