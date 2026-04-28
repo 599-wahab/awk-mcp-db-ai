@@ -5,19 +5,17 @@ import { getAppSchema } from "@/lib/memory/schema-loader";
 import { AIProviderFactory } from "@/lib/ai/factory";
 import { PrismaClient } from "@prisma/client";
 
-// app/api/ai/route.ts  — top of file
-
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers":
-    "Content-Type, x-api-key, X-API-Key, x-user-id, X-User-Id, x-user-email, X-User-Email, authorization, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, x-api-key, X-API-Key",
   "Access-Control-Max-Age": "86400",
 };
 
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS });
 }
+
 // ── Universal tenant filter injection ─────────────────────────────────────────
 function injectTenantFilter(sql: string, tenantId: string): string {
   if (sql.toLowerCase().includes("tenant_id")) return sql;
@@ -75,7 +73,6 @@ function friendlyError(msg: string): { message: string; errorType: string } {
   };
 }
 
-// Detect language — Urdu script OR common Roman Urdu words
 function detectLang(text: string): "ur" | "en" {
   if (/[\u0600-\u06FF]/.test(text)) return "ur";
   if (
@@ -215,13 +212,9 @@ function getInsights(result: any[], lang: "ur" | "en") {
 }
 
 export async function POST(req: Request) {
-  // ── Read all possible header casing variants ──────────────────────────────
+  // ── 1. Read API key from header ───────────────────────────────────────────
   const apiKey =
     req.headers.get("x-api-key") || req.headers.get("X-API-Key") || "";
-  const userId =
-    req.headers.get("x-user-id") || req.headers.get("X-User-Id") || "";
-  const userEmail =
-    req.headers.get("x-user-email") || req.headers.get("X-User-Email") || "";
 
   if (!apiKey) {
     return Response.json(
@@ -230,7 +223,27 @@ export async function POST(req: Request) {
     );
   }
 
-  // Use explicit select so TypeScript knows about the new fields
+  // ── 2. Parse body first — userId/userEmail now come from body ─────────────
+  const {
+    question,
+    preferredLang,
+    tenant_id,
+    chatHistory,
+    userId: bodyUserId,
+    userEmail: bodyUserEmail,
+  } = await req.json();
+
+  // ── 3. Resolve userId / userEmail from body ───────────────────────────────
+  const userId: string = bodyUserId || "";
+  const userEmail: string = bodyUserEmail || "";
+
+  if (!question?.trim())
+    return Response.json(
+      { error: "Question is required." },
+      { status: 400, headers: CORS },
+    );
+
+  // ── 4. Look up the connected app ──────────────────────────────────────────
   const app = await prisma.connectedApp.findUnique({
     where: { apiKey },
     select: {
@@ -259,14 +272,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { question, preferredLang, tenant_id, chatHistory } = await req.json();
-  if (!question?.trim())
-    return Response.json(
-      { error: "Question is required." },
-      { status: 400, headers: CORS },
-    );
-
-  // Detect language — prefer user's setting, fall back to auto-detect
+  // ── 5. Language detection ─────────────────────────────────────────────────
   const detectedLang =
     preferredLang === "ur"
       ? "ur"
@@ -274,6 +280,7 @@ export async function POST(req: Request) {
         ? "en"
         : detectLang(question);
 
+  // ── 6. AI provider setup ──────────────────────────────────────────────────
   const providerType = (app.aiProvider || "GEMINI").toLowerCase();
   const aiApiKey = app.geminiKey || undefined;
   const aiBaseUrl = app.aiBaseUrl || undefined;
@@ -282,11 +289,13 @@ export async function POST(req: Request) {
     type: providerType as any,
   });
 
+  // ── 7. Load schema ────────────────────────────────────────────────────────
   let schema: object = {};
   try {
     schema = await getAppSchema(app.id);
   } catch {}
 
+  // ── 8. Tenant resolution ──────────────────────────────────────────────────
   const hasTenantColumn = schemaHasTenantId(schema);
   const effectiveTenantId =
     tenant_id && hasTenantColumn ? String(tenant_id).trim() : null;
@@ -295,6 +304,7 @@ export async function POST(req: Request) {
     : false;
   const safeTenantId = isValidUuid ? effectiveTenantId : null;
 
+  // ── 9. Clarification check ────────────────────────────────────────────────
   const clarify = needsClarification(question, schema, detectedLang);
   if (clarify) {
     return Response.json(
@@ -312,6 +322,7 @@ export async function POST(req: Request) {
     );
   }
 
+  // ── 10. Build context prompt ──────────────────────────────────────────────
   let contextPrompt = question;
   if (chatHistory?.length) {
     const recent = chatHistory.slice(-4);
@@ -336,12 +347,12 @@ export async function POST(req: Request) {
     ? `[Scope ALL queries to tenant_id = '${safeTenantId}'. Never omit this filter.]\n\n${contextPrompt}`
     : contextPrompt;
 
-  // ── Generate SQL ──────────────────────────────────────────────────────────
+  // ── 11. Generate SQL ──────────────────────────────────────────────────────
   let sql: string;
   try {
     const raw = await provider.generateSQL(
-      question,
-      JSON.stringify(schema),
+      tenantScopedQuestion,
+      JSON.stringify(schemaWithHint),
       aiApiKey,
       aiBaseUrl,
       aiModel,
@@ -355,6 +366,7 @@ export async function POST(req: Request) {
     );
   }
 
+  // ── 12. Inject tenant filter as safety net ────────────────────────────────
   if (safeTenantId) {
     sql = injectTenantFilter(sql, safeTenantId);
   }
@@ -367,6 +379,7 @@ export async function POST(req: Request) {
     );
   }
 
+  // ── 13. Execute against user's database ──────────────────────────────────
   const userPrisma = new PrismaClient({
     datasources: { db: { url: app.dbUrl } },
   });
@@ -378,7 +391,6 @@ export async function POST(req: Request) {
     const viz = detectViz(result, question);
     if (viz === "stacked") result = pivotStacked(result);
 
-    // Generate explanation in detected language
     let explanation =
       detectedLang === "ur"
         ? `${result.length} نتائج ملے۔`
@@ -427,7 +439,7 @@ export async function POST(req: Request) {
       { headers: CORS },
     );
   } catch (err: any) {
-    // Auto-fix
+    // ── 14. Auto-fix on SQL error ─────────────────────────────────────────
     try {
       const rawFixed = await provider.fixSQL(
         sql,
@@ -447,6 +459,7 @@ export async function POST(req: Request) {
 
       const raw2 = (await userPrisma.$queryRawUnsafe(fixedSql)) as any[];
       let result = serialize(raw2);
+      result = filterSmartResult(result, question);
       const viz = detectViz(result, question);
       if (viz === "stacked") result = pivotStacked(result);
 

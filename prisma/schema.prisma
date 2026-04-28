@@ -115,6 +115,7 @@ model ChatLog {
   result        String?      @db.Text
   explanation   String?      @db.Text
   wasSuccessful Boolean      @default(true)
+  detectedLang  String? 
   createdAt     DateTime     @default(now())
 
   @@map("chat_logs")
