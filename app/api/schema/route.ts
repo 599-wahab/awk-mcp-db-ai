@@ -1,7 +1,7 @@
 // app/api/schema/route.ts
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { buildSchemaFromUrl } from "@/lib/memory/schema-loader";
+import { getAppSchema } from "@/lib/memory/schema-loader";
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -15,13 +15,13 @@ export async function POST(req: Request) {
   if (!app.dbUrl) return Response.json({ error: "No database URL configured. Go to Settings first." }, { status: 400 });
 
   try {
-    const schema = await buildSchemaFromUrl(app.dbUrl);
-    await prisma.connectedApp.update({
-      where: { id: appId },
-      data: { schemaJson: JSON.stringify(schema), schemaBuiltAt: new Date() },
-    });
-    return Response.json({ success: true, tables: Object.keys(schema).length });
+    const schema = await getAppSchema(appId);
+    if (!schema || !Array.isArray(schema.tables)) {
+      throw new Error("Schema is missing tables array");
+    }
+    return Response.json({ success: true, tables: schema.tables.length });
   } catch (err: any) {
+    console.error("Schema build error:", err);
     return Response.json({ error: "Schema build failed: " + err.message }, { status: 500 });
   }
 }

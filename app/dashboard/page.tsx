@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import Charts from "@/app/components/charts/Charts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ function ErrorToast({ message, errorType, onClose }: {
         <span className="text-red-400 shrink-0 text-sm">✕</span>
         <div className="flex-1 min-w-0">
           <p className="text-[9px] text-red-400 uppercase tracking-wider mb-1">// Error</p>
-          <p className="text-white leading-relaxed mb-2 break-words text-[11px]">{message}</p>
+          <p className="text-white leading-relaxed mb-2 wrap-break-word text-[11px]">{message}</p>
           {["QUOTA_EXCEEDED","NO_KEY","INVALID_KEY","MODEL_NOT_FOUND"].includes(errorType || "") && (
             <a href="/dashboard/settings" className="text-[10px] underline" style={{ color: "#e8ff47" }}>
               → Fix in Settings
@@ -71,12 +71,10 @@ function MicOverlay({ onStop, isUr }: { onStop: () => void; isUr: boolean }) {
         .ripple-3 { animation: ripple 1.5s ease-out 1s infinite; }
       `}</style>
 
-      {/* Ripple rings */}
       <div className="relative flex items-center justify-center w-32 h-32 mb-6">
         <div className="ripple-1 absolute w-20 h-20 rounded-full border-2" style={{ borderColor: "#e8ff47" }} />
         <div className="ripple-2 absolute w-20 h-20 rounded-full border-2" style={{ borderColor: "#e8ff47" }} />
         <div className="ripple-3 absolute w-20 h-20 rounded-full border-2" style={{ borderColor: "#e8ff47" }} />
-        {/* Mic icon center */}
         <div className="relative w-20 h-20 rounded-full flex items-center justify-center" style={{ background: "#e8ff47" }}>
           <svg className="w-9 h-9 text-black" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -110,12 +108,10 @@ function useVoice() {
   }
   function speak(text: string, lang = "auto") {
     window.speechSynthesis.cancel();
-    // Strip markdown before speaking
     const clean = text
       .replace(/\*\*(.*?)\*\*/g, "$1").replace(/\*(.*?)\*/g, "$1")
       .replace(/#{1,6}\s/g, "").replace(/`[^`]*`/g, "")
-      .replace(/\d+\.\s/g, "").replace(/[-•]\s/g, "") // numbered/bullet lists
-      .replace(/\([\d,]+\)/g, m => m) // keep numbers in parens readable
+      .replace(/\d+\.\s/g, "").replace(/[-•]\s/g, "")
       .trim();
     const u = new SpeechSynthesisUtterance(clean);
     if (lang === "ur") {
@@ -163,13 +159,13 @@ export default function DashboardPage() {
   const [preferredLang, setPreferredLang] = useState("auto");
   const [textSize, setTextSize]       = useState("md");
 
-  // History sidebar
   const [showHistory, setShowHistory]     = useState(false);
   const [history, setHistory]             = useState<HistoryLog[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const stopRef   = useRef<(() => void) | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef  = useRef<HTMLInputElement>(null);
   const { listen, speak } = useVoice();
 
   useEffect(() => {
@@ -200,7 +196,6 @@ export default function DashboardPage() {
   const isUr    = preferredLang === "ur";
   const msgSize = TEXT_SIZES[textSize] || "text-sm";
 
-  // Load history when sidebar opens
   useEffect(() => {
     if (!showHistory) return;
     setHistoryLoading(true);
@@ -211,7 +206,6 @@ export default function DashboardPage() {
       .finally(() => setHistoryLoading(false));
   }, [showHistory]);
 
-  // Restore a past chat into messages view
   function restoreChat(log: HistoryLog) {
     const msgs: Message[] = [
       {
@@ -322,25 +316,19 @@ export default function DashboardPage() {
         .fm{font-family:'Space Mono',monospace;}
       `}</style>
 
-      {/* ── Mic overlay ───────────────────────────────────────────────────── */}
       {recording && <MicOverlay onStop={handleMic} isUr={isUr} />}
 
-      {/* ── Error toast ───────────────────────────────────────────────────── */}
       {toast && <ErrorToast message={toast.message} errorType={toast.errorType} onClose={() => setToast(null)} />}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          History sidebar (slides in from left on mobile, fixed on desktop)
-      ═══════════════════════════════════════════════════════════════════ */}
+      {/* History sidebar */}
       {showHistory && (
         <div
           className="fixed inset-0 z-40 lg:static lg:inset-auto lg:z-auto flex"
           onClick={e => { if (e.target === e.currentTarget) setShowHistory(false); }}
         >
-          {/* Backdrop on mobile */}
           <div className="absolute inset-0 bg-black/70 lg:hidden" onClick={() => setShowHistory(false)} />
 
           <aside className="relative z-10 w-72 max-w-[85vw] lg:w-64 xl:w-72 h-full border-r border-[#1e1e1e] bg-[#080808] flex flex-col shrink-0">
-            {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e1e]">
               <p className="fm text-[10px] text-[#e8ff47] uppercase tracking-wider">
                 // {isUr ? "پرانی گفتگو" : "Chat History"}
@@ -348,7 +336,6 @@ export default function DashboardPage() {
               <button onClick={() => setShowHistory(false)} className="text-[#3a3a3a] hover:text-white text-xs">✕</button>
             </div>
 
-            {/* New chat button */}
             <button
               onClick={() => { setMessages([]); setShowHistory(false); inputRef.current?.focus(); }}
               className="mx-3 mt-3 mb-1 fd text-sm tracking-wider py-2 text-black transition hover:opacity-90"
@@ -357,7 +344,6 @@ export default function DashboardPage() {
               + {isUr ? "نئی گفتگو" : "NEW CHAT"}
             </button>
 
-            {/* History list */}
             <div className="flex-1 overflow-y-auto py-2">
               {historyLoading ? (
                 <p className="fm text-[10px] text-[#3a3a3a] text-center py-8">// Loading...</p>
@@ -396,27 +382,23 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          Main chat area
-      ═══════════════════════════════════════════════════════════════════ */}
+      {/* Main chat area */}
       <div className="flex flex-col flex-1 min-w-0 border border-[#1e1e1e] bg-[#0d0d0d] overflow-hidden">
 
-        {/* ── Top toolbar ───────────────────────────────────────────────── */}
+        {/* Top toolbar */}
         <div className="flex items-center gap-2 px-3 py-2 border-b border-[#1e1e1e] shrink-0">
-          {/* History toggle */}
           <button
             onClick={() => setShowHistory(!showHistory)}
             className="fm text-[10px] border border-[#1e1e1e] text-[#5a5a5a] px-2.5 py-1.5 hover:border-[#e8ff47] hover:text-[#e8ff47] transition-colors shrink-0"
             title={isUr ? "پرانی گفتگو" : "Chat History"}
           >
-            ☰ {/* hamburger / history icon */}
+            ☰
           </button>
 
-          {/* App selector */}
           {apps.length > 0 ? (
             <select
               value={selectedKey} onChange={e => setSelectedKey(e.target.value)}
-              className="fm text-xs bg-black border border-[#1e1e1e] text-white px-2 py-1.5 focus:outline-none focus:border-[#e8ff47] transition-colors flex-1 min-w-0 max-w-[160px] truncate"
+              className="fm text-xs bg-black border border-[#1e1e1e] text-white px-2 py-1.5 focus:outline-none focus:border-[#e8ff47] transition-colors flex-1 min-w-0 max-w-40 truncate"
             >
               {apps.map(a => <option key={a.id} value={a.apiKey}>{a.name}</option>)}
             </select>
@@ -451,7 +433,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* ── Messages ──────────────────────────────────────────────────── */}
+        {/* Messages */}
         <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 scroll-smooth">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center gap-4 px-4 py-8">
@@ -489,7 +471,6 @@ export default function DashboardPage() {
                   style={msg.isUser ? { background: "#e8ff47" } : {}}
                 >
                   <div className="px-3 py-2.5">
-                    {/* Label row */}
                     <div className="flex items-center justify-between gap-2 mb-1.5">
                       <p className={`fm text-[9px] ${msg.isUser ? "text-black/50" : msg.isError ? "text-red-400" : "text-[#3a3a3a]"}`}>
                         {msg.isUser ? (isUr ? "آپ" : "YOU")
@@ -502,26 +483,22 @@ export default function DashboardPage() {
                       </p>
                     </div>
 
-                    {/* Message text */}
                     <p className={`whitespace-pre-wrap leading-relaxed ${msgSize}`} dir="auto">
                       {msg.content}
                     </p>
 
-                    {/* Settings link */}
                     {msg.isError && ["QUOTA_EXCEEDED","NO_KEY","INVALID_KEY"].includes(msg.errorType || "") && (
                       <a href="/dashboard/settings" className="fm text-[10px] underline mt-2 block" style={{ color: "#e8ff47" }}>
                         → {isUr ? "Settings میں جائیں" : "Go to Settings"}
                       </a>
                     )}
 
-                    {/* KPI */}
                     {!msg.isUser && !msg.isError && msg.visualization === "kpi" && msg.result?.[0] && (
                       <div className="fd mt-2" style={{ color: "#e8ff47", fontSize: "clamp(2rem,8vw,3.5rem)" }}>
                         {String(Object.values(msg.result[0])[0])}
                       </div>
                     )}
 
-                    {/* Chart */}
                     {!msg.isUser && !msg.isError && isChartable && (
                       <div className="mt-3">
                         <div className="flex gap-1 mb-2 flex-wrap">
@@ -543,7 +520,6 @@ export default function DashboardPage() {
                       </div>
                     )}
 
-                    {/* Table */}
                     {!msg.isUser && !msg.isError && msg.visualization === "table" && hasResult && (
                       <div className="overflow-x-auto mt-3 -mx-1">
                         <table className="min-w-full border border-[#1e1e1e] fm text-[10px]">
@@ -567,7 +543,6 @@ export default function DashboardPage() {
                       </div>
                     )}
 
-                    {/* Insights */}
                     {!msg.isUser && !msg.isError && msg.insights?.length ? (
                       <div className="mt-2.5 space-y-1 border-t border-[#1e1e1e] pt-2">
                         {msg.insights.map((ins, i) => (
@@ -576,7 +551,6 @@ export default function DashboardPage() {
                       </div>
                     ) : null}
 
-                    {/* SQL */}
                     {!msg.isUser && !msg.isError && msg.sql && (
                       <details className="mt-2">
                         <summary className="fm text-[10px] text-[#3a3a3a] cursor-pointer hover:text-[#5a5a5a] select-none">
@@ -586,7 +560,6 @@ export default function DashboardPage() {
                       </details>
                     )}
 
-                    {/* Like / Dislike */}
                     {!msg.isUser && !msg.isError && msg.chatLogId && (
                       <div className="flex items-center gap-2 mt-2.5 pt-2 border-t border-[#1e1e1e]">
                         <span className="fm text-[9px] text-[#3a3a3a]">
@@ -620,9 +593,8 @@ export default function DashboardPage() {
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-
+            );
+          })}
           {loading && (
             <div className="flex justify-start">
               <div className="bg-black border border-[#1e1e1e] px-4 py-3">
@@ -638,7 +610,7 @@ export default function DashboardPage() {
           <div ref={bottomRef}/>
         </div>
 
-        {/* ── Input bar ─────────────────────────────────────────────────── */}
+        {/* Input bar */}
         <div className="px-3 pb-safe-or-3 pt-2 border-t border-[#1e1e1e] shrink-0"
           style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom, 12px))" }}>
           <div className="flex gap-2 items-center">
@@ -651,10 +623,9 @@ export default function DashboardPage() {
               dir="auto"
               disabled={loading}
               className="flex-1 min-w-0 bg-black border border-[#1e1e1e] text-white px-3 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors disabled:opacity-50"
-              style={{ fontSize: "16px" }} /* prevents iOS zoom */
+              style={{ fontSize: "16px" }}
             />
 
-            {/* Mic button */}
             <button
               onClick={handleMic}
               disabled={loading}
@@ -666,7 +637,6 @@ export default function DashboardPage() {
               </svg>
             </button>
 
-            {/* Send button */}
             <button
               onClick={() => ask(question)}
               disabled={loading || !question.trim()}

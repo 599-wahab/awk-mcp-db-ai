@@ -41,18 +41,49 @@ function schemaHasTenantId(schema: object): boolean {
 }
 
 function friendlyError(msg: string): { message: string; errorType: string } {
-  if (msg === "QUOTA_EXCEEDED")   return { message: "AI API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.", errorType: "QUOTA_EXCEEDED" };
-  if (msg === "INVALID_KEY")      return { message: "AI API key is invalid. Check your key in Settings.", errorType: "INVALID_KEY" };
-  if (msg === "NO_KEY")           return { message: "No AI API key. Go to Settings → add your Gemini/OpenAI key.", errorType: "NO_KEY" };
-  if (msg === "MODEL_NOT_FOUND")  return { message: "AI model not found. Update model name in Settings (e.g. gemini-1.5-flash).", errorType: "MODEL_NOT_FOUND" };
-  if (msg.includes("ECONNREFUSED")) return { message: "Cannot connect to local AI. Make sure LM Studio or Ollama is running.", errorType: "CONNECTION_ERROR" };
-  return { message: "AI error: " + msg.replace("AI_ERROR:", "").slice(0, 100), errorType: "AI_ERROR" };
+  if (msg === "QUOTA_EXCEEDED")
+    return {
+      message:
+        "AI API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.",
+      errorType: "QUOTA_EXCEEDED",
+    };
+  if (msg === "INVALID_KEY")
+    return {
+      message: "AI API key is invalid. Check your key in Settings.",
+      errorType: "INVALID_KEY",
+    };
+  if (msg === "NO_KEY")
+    return {
+      message: "No AI API key. Go to Settings → add your Gemini/OpenAI key.",
+      errorType: "NO_KEY",
+    };
+  if (msg === "MODEL_NOT_FOUND")
+    return {
+      message:
+        "AI model not found. Update model name in Settings (e.g. gemini-1.5-flash).",
+      errorType: "MODEL_NOT_FOUND",
+    };
+  if (msg.includes("ECONNREFUSED"))
+    return {
+      message:
+        "Cannot connect to local AI. Make sure LM Studio or Ollama is running.",
+      errorType: "CONNECTION_ERROR",
+    };
+  return {
+    message: "AI error: " + msg.replace("AI_ERROR:", "").slice(0, 100),
+    errorType: "AI_ERROR",
+  };
 }
 
 // Detect language — Urdu script OR common Roman Urdu words
 function detectLang(text: string): "ur" | "en" {
   if (/[\u0600-\u06FF]/.test(text)) return "ur";
-  if (/\b(kya|hai|hain|aap|mujhe|batao|dikhao|kitne|kitni|total|salary|order|sale)\b/i.test(text)) return "ur";
+  if (
+    /\b(kya|hai|hain|aap|mujhe|batao|dikhao|kitne|kitni|total|salary|order|sale)\b/i.test(
+      text,
+    )
+  )
+    return "ur";
   return "en";
 }
 
@@ -228,19 +259,28 @@ export async function POST(req: Request) {
     );
   }
 
-  const { question, preferredLang } = await req.json();
-  if (!question?.trim()) return Response.json({ error: "Question is required." }, { status: 400, headers: CORS });
+  const { question, preferredLang, tenant_id, chatHistory } = await req.json();
+  if (!question?.trim())
+    return Response.json(
+      { error: "Question is required." },
+      { status: 400, headers: CORS },
+    );
 
   // Detect language — prefer user's setting, fall back to auto-detect
-  const detectedLang = preferredLang === "ur" ? "ur"
-                     : preferredLang === "en" ? "en"
-                     : detectLang(question);
+  const detectedLang =
+    preferredLang === "ur"
+      ? "ur"
+      : preferredLang === "en"
+        ? "en"
+        : detectLang(question);
 
   const providerType = (app.aiProvider || "GEMINI").toLowerCase();
-  const aiApiKey  = app.geminiKey || undefined;
+  const aiApiKey = app.geminiKey || undefined;
   const aiBaseUrl = app.aiBaseUrl || undefined;
-  const aiModel   = app.aiModel   || undefined;
-  const provider = AIProviderFactory.createProvider({ type: providerType as any });
+  const aiModel = app.aiModel || undefined;
+  const provider = AIProviderFactory.createProvider({
+    type: providerType as any,
+  });
 
   let schema: object = {};
   try {
@@ -299,7 +339,13 @@ export async function POST(req: Request) {
   // ── Generate SQL ──────────────────────────────────────────────────────────
   let sql: string;
   try {
-    const raw = await provider.generateSQL(question, JSON.stringify(schema), aiApiKey, aiBaseUrl, aiModel);
+    const raw = await provider.generateSQL(
+      question,
+      JSON.stringify(schema),
+      aiApiKey,
+      aiBaseUrl,
+      aiModel,
+    );
     sql = cleanSQL(raw);
   } catch (err: any) {
     const fe = friendlyError(err.message);
@@ -325,36 +371,61 @@ export async function POST(req: Request) {
     datasources: { db: { url: app.dbUrl } },
   });
 
-  const runQuery = async (querySql: string) => {
-    const raw2 = (await userPrisma.$queryRawUnsafe(querySql)) as any[];
+  try {
+    const raw2 = (await userPrisma.$queryRawUnsafe(sql)) as any[];
     let result = serialize(raw2);
     result = filterSmartResult(result, question);
     const viz = detectViz(result, question);
     if (viz === "stacked") result = pivotStacked(result);
 
     // Generate explanation in detected language
-    let explanation = detectedLang === "ur" ? `${result.length} نتائج ملے۔` : `Found ${result.length} result(s).`;
+    let explanation =
+      detectedLang === "ur"
+        ? `${result.length} نتائج ملے۔`
+        : `Found ${result.length} result(s).`;
     try {
       explanation = await provider.generateExplanation(
         detectedLang === "ur" ? `${question}\n\nجواب اردو میں دیں۔` : question,
-        result, aiApiKey, aiBaseUrl, aiModel
+        result,
+        aiApiKey,
+        aiBaseUrl,
+        aiModel,
       );
     } catch {}
 
-    const log = await prisma.chatLog.create({
-      data: { appId: app.id, question, generatedSql: sql, result: JSON.stringify(result), explanation, wasSuccessful: true, detectedLang },
-    }).catch(() => null);
+    const log = await prisma.chatLog
+      .create({
+        data: {
+          appId: app.id,
+          question,
+          generatedSql: sql,
+          result: JSON.stringify(result),
+          explanation,
+          wasSuccessful: true,
+          detectedLang,
+        },
+      })
+      .catch(() => null);
 
-    await prisma.connectedApp.update({ where: { id: app.id }, data: { totalChats: { increment: 1 }, lastActiveAt: new Date() } }).catch(() => {});
+    await prisma.connectedApp
+      .update({
+        where: { id: app.id },
+        data: { totalChats: { increment: 1 }, lastActiveAt: new Date() },
+      })
+      .catch(() => {});
 
-    return Response.json({
-      explanation, sql, result,
-      visualization: viz,
-      insights: getInsights(result, detectedLang),
-      detectedLang,
-      chatLogId: log?.id,
-    }, { headers: CORS });
-
+    return Response.json(
+      {
+        explanation,
+        sql,
+        result,
+        visualization: viz,
+        insights: getInsights(result, detectedLang),
+        detectedLang,
+        chatLogId: log?.id,
+      },
+      { headers: CORS },
+    );
   } catch (err: any) {
     // Auto-fix
     try {
@@ -374,35 +445,72 @@ export async function POST(req: Request) {
 
       if (!isSafeSQL(fixedSql)) throw new Error("Fixed SQL unsafe");
 
-      const raw2 = await userPrisma.$queryRawUnsafe(fixedSql) as any[];
+      const raw2 = (await userPrisma.$queryRawUnsafe(fixedSql)) as any[];
       let result = serialize(raw2);
       const viz = detectViz(result, question);
       if (viz === "stacked") result = pivotStacked(result);
 
-      let explanation = detectedLang === "ur" ? `${result.length} نتائج ملے۔` : `Found ${result.length} result(s).`;
+      let explanation =
+        detectedLang === "ur"
+          ? `${result.length} نتائج ملے۔`
+          : `Found ${result.length} result(s).`;
       try {
         explanation = await provider.generateExplanation(
-          detectedLang === "ur" ? `${question}\n\nجواب اردو میں دیں۔` : question,
-          result, aiApiKey, aiBaseUrl, aiModel
+          detectedLang === "ur"
+            ? `${question}\n\nجواب اردو میں دیں۔`
+            : question,
+          result,
+          aiApiKey,
+          aiBaseUrl,
+          aiModel,
         );
       } catch {}
 
-      const log = await prisma.chatLog.create({
-        data: { appId: app.id, question, generatedSql: fixedSql, result: JSON.stringify(result), explanation, wasSuccessful: true, detectedLang },
-      }).catch(() => null);
+      const log = await prisma.chatLog
+        .create({
+          data: {
+            appId: app.id,
+            question,
+            generatedSql: fixedSql,
+            result: JSON.stringify(result),
+            explanation,
+            wasSuccessful: true,
+            detectedLang,
+          },
+        })
+        .catch(() => null);
 
-      await prisma.connectedApp.update({ where: { id: app.id }, data: { totalChats: { increment: 1 }, lastActiveAt: new Date() } }).catch(() => {});
+      await prisma.connectedApp
+        .update({
+          where: { id: app.id },
+          data: { totalChats: { increment: 1 }, lastActiveAt: new Date() },
+        })
+        .catch(() => {});
 
-      return Response.json({
-        explanation, sql: fixedSql, result,
-        visualization: viz,
-        insights: getInsights(result, detectedLang),
-        detectedLang,
-        chatLogId: log?.id,
-      }, { headers: CORS });
-
+      return Response.json(
+        {
+          explanation,
+          sql: fixedSql,
+          result,
+          visualization: viz,
+          insights: getInsights(result, detectedLang),
+          detectedLang,
+          chatLogId: log?.id,
+        },
+        { headers: CORS },
+      );
     } catch (fixErr: any) {
-      await prisma.chatLog.create({ data: { appId: app.id, question, generatedSql: sql, wasSuccessful: false, detectedLang } }).catch(() => {});
+      await prisma.chatLog
+        .create({
+          data: {
+            appId: app.id,
+            question,
+            generatedSql: sql,
+            wasSuccessful: false,
+            detectedLang,
+          },
+        })
+        .catch(() => {});
       const fe = friendlyError(fixErr.message);
       return Response.json(
         { error: fe.message, errorType: fe.errorType },

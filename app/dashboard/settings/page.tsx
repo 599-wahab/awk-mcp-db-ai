@@ -1,4 +1,3 @@
-// app/dashboard/settings/page.tsx
 "use client";
 import { useState, useEffect } from "react";
 
@@ -32,7 +31,19 @@ const AI_PROVIDERS = [
   { value: "OLLAMA", label: "Ollama (Local)", needsKey: false, defaultModel: "llama2", defaultUrl: "http://localhost:11434" },
 ];
 
+// Helper component for section titles
+const Section = ({ title }: { title: string }) => (
+  <div className="flex items-center gap-3">
+    <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest">//</div>
+    <h2 className="fd text-2xl tracking-wide text-white">{title}</h2>
+  </div>
+);
+
+// Reusable input styling
+const INPUT = "w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors";
+
 export default function SettingsPage() {
+  // ----- Existing states -----
   const [apps, setApps] = useState<App[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [dbUrl, setDbUrl] = useState("");
@@ -44,6 +55,19 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
+  // ----- New states for language preferences -----
+  const [isUr, setIsUr] = useState(false);
+  const [prefSaving, setPrefSaving] = useState(false);
+  const [prefSaved, setPrefSaved] = useState(false);
+
+  // ----- New states for password change -----
+  const [currPw, setCurrPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  // ----- Load existing app data -----
   useEffect(() => {
     fetch("/api/widget/register")
       .then(r => r.json())
@@ -74,9 +98,14 @@ export default function SettingsPage() {
       .catch(() => {});
   }, [selectedId]);
 
+  // Load language preference from localStorage (or could be from user API)
+  useEffect(() => {
+    const savedLang = localStorage.getItem("pref_lang");
+    if (savedLang === "ur") setIsUr(true);
+  }, []);
+
   const selectedProvider = AI_PROVIDERS.find(p => p.value === aiProvider);
   
-  // Auto-fill defaults when provider changes
   useEffect(() => {
     if (selectedProvider) {
       if (!aiModel) setAiModel(selectedProvider.defaultModel);
@@ -84,6 +113,7 @@ export default function SettingsPage() {
     }
   }, [aiProvider, selectedProvider]);
 
+  // ----- Save app settings (AI + DB) -----
   async function handleSave() {
     if (!selectedId) { setError("Please select an app first."); return; }
     setSaving(true);
@@ -104,6 +134,59 @@ export default function SettingsPage() {
     if (data.success) { setSaved(true); setTimeout(() => setSaved(false), 3000); }
     else setError(data.error || "Save failed");
     setSaving(false);
+  }
+
+  // ----- Save language preference -----
+  async function savePrefs() {
+    setPrefSaving(true);
+    // Save to localStorage (or call an API endpoint)
+    localStorage.setItem("pref_lang", isUr ? "ur" : "en");
+    // If you have a backend endpoint, uncomment:
+    // await fetch("/api/user/preferences", {
+    //   method: "POST",
+    //   headers: { "Content-Type": "application/json" },
+    //   body: JSON.stringify({ language: isUr ? "ur" : "en" }),
+    // });
+    setPrefSaved(true);
+    setPrefSaving(false);
+    setTimeout(() => setPrefSaved(false), 3000);
+  }
+
+  // ----- Change password -----
+  async function changePassword() {
+    if (!currPw || !newPw || !confirmPw) {
+      setPwMsg({ text: isUr ? "براہ کرم تمام فیلڈز بھریں" : "Please fill all fields", ok: false });
+      return;
+    }
+    if (newPw !== confirmPw) {
+      setPwMsg({ text: isUr ? "نیا پاس ورڈ مماثل نہیں" : "New passwords do not match", ok: false });
+      return;
+    }
+    if (newPw.length < 6) {
+      setPwMsg({ text: isUr ? "پاس ورڈ کم از کم 6 حروف کا ہو" : "Password must be at least 6 characters", ok: false });
+      return;
+    }
+    setPwSaving(true);
+    setPwMsg(null);
+    try {
+      const res = await fetch("/api/user/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: currPw, newPassword: newPw }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPwMsg({ text: isUr ? "پاس ورڈ تبدیل ہو گیا" : "Password changed successfully", ok: true });
+        setCurrPw("");
+        setNewPw("");
+        setConfirmPw("");
+      } else {
+        setPwMsg({ text: data.error || (isUr ? "ناکام" : "Failed"), ok: false });
+      }
+    } catch (err) {
+      setPwMsg({ text: isUr ? "سرور کی خرابی" : "Server error", ok: false });
+    }
+    setPwSaving(false);
   }
 
   const selectedApp = apps.find(a => a.id === selectedId);
@@ -265,7 +348,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Local Setup Instructions */}
+      {/* Local Setup Instructions + Language Preference */}
       <div className="border-t border-[#1e1e1e] pt-6">
         <p className="fm text-xs text-[#3a3a3a] uppercase tracking-wider mb-3">// Local AI Setup (LM Studio / Ollama)</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -291,19 +374,31 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 pt-1">
-          <button onClick={savePrefs} disabled={prefSaving}
-            className="fd text-lg tracking-wide px-8 py-3 text-black disabled:opacity-50 transition hover:-translate-y-0.5"
-            style={{ background: "#e8ff47" }}>
+        {/* Language preference toggle */}
+        <div className="mt-6 flex items-center gap-6">
+          <div className="flex items-center gap-3">
+            <span className={`fm text-xs ${!isUr ? "text-[#e8ff47]" : "text-[#5a5a5a]"}`}>EN</span>
+            <button
+              onClick={() => setIsUr(!isUr)}
+              className="w-12 h-6 bg-[#1e1e1e] rounded-full relative transition-colors"
+            >
+              <div className={`absolute top-0.5 w-5 h-5 bg-[#e8ff47] rounded-full transition-transform ${isUr ? "translate-x-6" : "translate-x-0.5"}`} />
+            </button>
+            <span className={`fm text-xs ${isUr ? "text-[#e8ff47]" : "text-[#5a5a5a]"}`}>UR</span>
+          </div>
+          <button
+            onClick={savePrefs}
+            disabled={prefSaving}
+            className="fd text-lg tracking-wide px-6 py-2 text-black disabled:opacity-50 transition hover:-translate-y-0.5"
+            style={{ background: "#e8ff47" }}
+          >
             {prefSaving ? "SAVING..." : (isUr ? "محفوظ کریں" : "SAVE PREFERENCES")}
           </button>
           {prefSaved && <span className="fm text-xs text-[#e8ff47]">✓ {isUr ? "محفوظ ہو گیا — صفحہ تازہ کریں" : "Saved — reload to apply"}</span>}
         </div>
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════════════
-          SECTION 3 — Change Password
-      ════════════════════════════════════════════════════════════════════ */}
+      {/* Change Password Section */}
       <div className="border border-[#1e1e1e] bg-[#0d0d0d] p-5 space-y-4">
         <Section title={isUr ? "پاس ورڈ تبدیل کریں" : "Change Password"} />
 
@@ -343,9 +438,7 @@ export default function SettingsPage() {
         </button>
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════════════
-          SECTION 4 — Training Data Export
-      ════════════════════════════════════════════════════════════════════ */}
+      {/* Training Data Export */}
       <div className="border border-[#1e1e1e] bg-[#0d0d0d] p-5 space-y-4">
         <Section title={isUr ? "AI ٹریننگ ڈیٹا" : "AI Training Data Export"} />
 

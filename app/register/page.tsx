@@ -1,22 +1,20 @@
 "use client";
 // app/register/page.tsx
-// AWK TLD BOT — Create Account
-
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function RegisterPage() {
-  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", databaseUrl: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [lang, setLang] = useState<"en" | "ur">("en");
   const router = useRouter();
 
   const t = lang === "ur"
-    ? { heading: "اکاؤنٹ بنائیں", sub: "مفت میں شروع کریں", name: "آپ کا نام", email: "ای میل", pass: "پاس ورڈ", confirm: "پاس ورڈ دوبارہ", btn: "اکاؤنٹ بنائیں", loading: "بن رہا ہے...", haveAcc: "پہلے سے اکاؤنٹ ہے؟", login: "لاگ ان کریں" }
-    : { heading: "Create Account", sub: "Start for free — no credit card", name: "Full name", email: "Email address", pass: "Password", confirm: "Confirm password", btn: "Create Account", loading: "Creating...", haveAcc: "Already have an account?", login: "Sign in" };
+    ? { heading: "اکاؤنٹ بنائیں", sub: "مفت میں شروع کریں", name: "آپ کا نام", email: "ای میل", pass: "پاس ورڈ", confirm: "پاس ورڈ دوبارہ", dbUrl: "ڈیٹا بیس یو آر ایل (اختیاری)", btn: "اکاؤنٹ بنائیں", loading: "بن رہا ہے...", haveAcc: "پہلے سے اکاؤنٹ ہے؟", login: "لاگ ان کریں" }
+    : { heading: "Create Account", sub: "Start for free — no credit card", name: "Full name", email: "Email address", pass: "Password", confirm: "Confirm password", dbUrl: "Database URL (optional)", btn: "Create Account", loading: "Creating...", haveAcc: "Already have an account?", login: "Sign in" };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -36,7 +34,12 @@ export default function RegisterPage() {
     const res = await fetch("/api/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: form.name, email: form.email, password: form.password }),
+      body: JSON.stringify({
+        name: form.name,
+        email: form.email,
+        password: form.password,
+        databaseUrl: form.databaseUrl || undefined,
+      }),
     });
 
     const data = await res.json();
@@ -45,6 +48,11 @@ export default function RegisterPage() {
       setError(data.error || "Registration failed");
       setLoading(false);
       return;
+    }
+
+    // If API key was returned, store it in localStorage for convenience
+    if (data.apiKey) {
+      localStorage.setItem("bot_api_key", data.apiKey);
     }
 
     // Auto-login after register
@@ -91,7 +99,6 @@ export default function RegisterPage() {
       <div className="flex-1 grid-bg flex items-center justify-center px-4 py-16">
         <div className="w-full max-w-md fu">
           <div className="border border-[#1e1e1e] bg-[#0d0d0d] p-8">
-            {/* Header */}
             <div className="mb-8">
               <div className="fd text-5xl tracking-wider mb-1" style={{ color: "#e8ff47" }}>{t.heading}</div>
               <p className="fm text-xs text-[#5a5a5a] uppercase tracking-wider">{t.sub}</p>
@@ -149,6 +156,21 @@ export default function RegisterPage() {
                     dir="ltr"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">{t.dbUrl}</label>
+                <input
+                  type="text"
+                  value={form.databaseUrl}
+                  onChange={e => setForm(f => ({ ...f, databaseUrl: e.target.value }))}
+                  className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-3 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
+                  placeholder="postgresql://user:pass@host:5432/your_erp"
+                  dir="ltr"
+                />
+                <p className="text-[10px] text-[#5a5a5a] mt-1">
+                  Leave empty to connect later from dashboard
+                </p>
               </div>
 
               {error && (
