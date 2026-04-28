@@ -54,7 +54,7 @@ function friendlyError(msg: string): { message: string; errorType: string } {
   if (msg === "NO_KEY")
     return {
       message: "No AI API key. Go to Settings → add your Gemini/OpenAI key.",
-      errorType: "NO_KEY",
+      errorType: "NO KEY",
     };
   if (msg === "MODEL_NOT_FOUND")
     return {
