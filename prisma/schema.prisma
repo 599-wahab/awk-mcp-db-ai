@@ -13,8 +13,6 @@ model User {
   name          String?
   password      String
   role          Role           @default(USER)
-  preferredLang String         @default("auto")
-  textSize      String         @default("md")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   connectedApps ConnectedApp[]
@@ -67,28 +65,29 @@ model VerificationToken {
   @@map("verification_tokens")
 }
 
+// Each user's registered ERP/app
 model ConnectedApp {
-  id            String         @id @default(cuid())
+  id            String    @id @default(cuid())
   userId        String
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name          String
-  apiKey        String         @unique
+  apiKey        String    @unique
   origin        String?
-  isActive      Boolean        @default(true)
+  isActive      Boolean   @default(true)
   dbUrl         String?
-  dbType        DbType         @default(POSTGRESQL)
-  geminiKey     String?
-  schemaJson    String?        @db.Text
+  dbType        DbType    @default(POSTGRESQL)
+  geminiKey     String?   // Per-app Gemini key (overrides env var)
+  schemaJson    String?   @db.Text
   schemaBuiltAt DateTime?
-  contextJson   String?        @db.Text
-  totalChats    Int            @default(0)
+  contextJson   String?   @db.Text
+  totalChats    Int       @default(0)
   lastActiveAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  chatLogs      ChatLog[]
   aiProvider    AIProviderType @default(GEMINI)
   aiModel       String?
   aiBaseUrl     String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  chatLogs      ChatLog[]
 
   @@map("connected_apps")
 }
@@ -116,8 +115,6 @@ model ChatLog {
   result        String?      @db.Text
   explanation   String?      @db.Text
   wasSuccessful Boolean      @default(true)
-  feedback      String?
-  detectedLang  String?
   createdAt     DateTime     @default(now())
 
   @@map("chat_logs")
