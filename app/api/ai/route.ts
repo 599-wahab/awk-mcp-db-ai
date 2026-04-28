@@ -5,18 +5,19 @@ import { getAppSchema } from "@/lib/memory/schema-loader";
 import { AIProviderFactory } from "@/lib/ai/factory";
 import { PrismaClient } from "@prisma/client";
 
+// app/api/ai/route.ts  — top of file
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, x-api-key, X-API-Key, x-user-id, X-User-Id, x-user-email, X-User-Email",
+    "Content-Type, x-api-key, X-API-Key, x-user-id, X-User-Id, x-user-email, X-User-Email, authorization, Authorization",
   "Access-Control-Max-Age": "86400",
 };
 
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS });
 }
-
 // ── Universal tenant filter injection ─────────────────────────────────────────
 function injectTenantFilter(sql: string, tenantId: string): string {
   if (sql.toLowerCase().includes("tenant_id")) return sql;
