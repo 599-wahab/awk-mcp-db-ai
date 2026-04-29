@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 import Charts from "@/app/components/charts/Charts";
+import ChatHistory, { ChatLog } from "@/app/components/chat/ChatHistory";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Message {
@@ -20,18 +21,6 @@ interface Message {
 }
 
 interface App { id: string; name: string; apiKey: string; }
-
-interface HistoryLog {
-  id: string;
-  question: string;
-  explanation: string | null;
-  generatedSql: string | null;
-  result: string | null;
-  feedback: string | null;
-  detectedLang: string | null;
-  createdAt: string;
-  appId: string;
-}
 
 // ── Error Toast ───────────────────────────────────────────────────────────────
 function ErrorToast({ message, errorType, onClose }: {
@@ -129,23 +118,6 @@ function useVoice() {
 
 const TEXT_SIZES: Record<string, string> = { sm: "text-xs", md: "text-sm", lg: "text-base" };
 
-// ── Group history by date ─────────────────────────────────────────────────────
-function groupByDate(logs: HistoryLog[]) {
-  const groups: Record<string, HistoryLog[]> = {};
-  logs.forEach(l => {
-    const d = new Date(l.createdAt);
-    const today = new Date();
-    const yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
-    let label: string;
-    if (d.toDateString() === today.toDateString())     label = "Today";
-    else if (d.toDateString() === yesterday.toDateString()) label = "Yesterday";
-    else label = d.toLocaleDateString("en-PK", { day: "numeric", month: "short" });
-    if (!groups[label]) groups[label] = [];
-    groups[label].push(l);
-  });
-  return groups;
-}
-
 export default function DashboardPage() {
   const [apps, setApps] = useState<App[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
@@ -158,10 +130,7 @@ export default function DashboardPage() {
   const [toast, setToast]             = useState<{ message: string; errorType?: string } | null>(null);
   const [preferredLang, setPreferredLang] = useState("auto");
   const [textSize, setTextSize]       = useState("md");
-
-  const [showHistory, setShowHistory]     = useState(false);
-  const [history, setHistory]             = useState<HistoryLog[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   const stopRef   = useRef<(() => void) | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -196,17 +165,12 @@ export default function DashboardPage() {
   const isUr    = preferredLang === "ur";
   const msgSize = TEXT_SIZES[textSize] || "text-sm";
 
-  useEffect(() => {
-    if (!showHistory) return;
-    setHistoryLoading(true);
-    fetch("/api/chat-sessions")
-      .then(r => r.json())
-      .then(data => { setHistory(Array.isArray(data) ? data : []); })
-      .catch(() => {})
-      .finally(() => setHistoryLoading(false));
-  }, [showHistory]);
+  // Derive current app ID from selected API key
+  const selectedApp = apps.find(app => app.apiKey === selectedKey);
+  const currentAppId = selectedApp?.id;
 
-  function restoreChat(log: HistoryLog) {
+  // Restore a previous chat from history
+  function restoreChat(log: ChatLog) {
     const msgs: Message[] = [
       {
         id: `h-${log.id}-q`,
@@ -220,7 +184,7 @@ export default function DashboardPage() {
         isUser: false,
         timestamp: new Date(log.createdAt),
         sql: log.generatedSql || undefined,
-        result: log.result ? JSON.parse(log.result) : undefined,
+        result: log.result ? (typeof log.result === "string" ? JSON.parse(log.result) : log.result) : undefined,
         detectedLang: (log.detectedLang as "ur" | "en") || undefined,
         chatLogId: log.id,
         feedback: (log.feedback as "like" | "dislike" | null) || null,
@@ -264,7 +228,7 @@ export default function DashboardPage() {
         setToast({ message: data.error, errorType: data.errorType });
         setMessages(m => [...m, {
           id:(Date.now()+1).toString(), content:data.explanation,
-          isUser:false, timestamp:new Date(), isClarification:true,
+          isUser:false, timestamp:new Date(), isError:true,
           detectedLang:data.detectedLang,
         }]);
       } else {
@@ -306,8 +270,6 @@ export default function DashboardPage() {
     ? ["آج کی total sales کتنی ہے؟", "ماہانہ آمدنی کا چارٹ", "کتنے orders pending ہیں؟", "سب سے زیادہ بکنے والی مصنوعات"]
     : ["Today's total sales", "Monthly revenue chart", "How many pending orders?", "Top 5 products by quantity"];
 
-  const grouped = groupByDate(history);
-
   return (
     <div className={`flex h-[calc(100dvh-57px)] overflow-hidden ${msgSize}`} style={{ fontFamily: "'DM Sans',sans-serif" }}>
       <style>{`
@@ -344,39 +306,8 @@ export default function DashboardPage() {
               + {isUr ? "نئی گفتگو" : "NEW CHAT"}
             </button>
 
-            <div className="flex-1 overflow-y-auto py-2">
-              {historyLoading ? (
-                <p className="fm text-[10px] text-[#3a3a3a] text-center py-8">// Loading...</p>
-              ) : history.length === 0 ? (
-                <p className="fm text-[10px] text-[#3a3a3a] text-center py-8">// No history yet</p>
-              ) : (
-                Object.entries(grouped).map(([date, logs]) => (
-                  <div key={date}>
-                    <p className="fm text-[9px] text-[#3a3a3a] uppercase tracking-wider px-4 py-2">{date}</p>
-                    {logs.map(log => (
-                      <button
-                        key={log.id}
-                        onClick={() => restoreChat(log)}
-                        className="w-full text-left px-4 py-2.5 hover:bg-[#1a1a1a] transition-colors group"
-                      >
-                        <p className={`text-xs text-white truncate leading-snug group-hover:text-[#e8ff47] transition-colors`} dir="auto">
-                          {log.question}
-                        </p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <p className="fm text-[9px] text-[#3a3a3a]">
-                            {new Date(log.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          </p>
-                          {log.feedback === "like"    && <span className="text-[9px]">👍</span>}
-                          {log.feedback === "dislike" && <span className="text-[9px]">👎</span>}
-                          {log.detectedLang && (
-                            <span className="fm text-[8px] text-[#3a3a3a]">[{log.detectedLang}]</span>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ))
-              )}
+            <div className="flex-1 overflow-y-auto">
+              <ChatHistory appId={currentAppId} onSelectLog={restoreChat} />
             </div>
           </aside>
         </div>
