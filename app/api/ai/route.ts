@@ -1,76 +1,94 @@
-// app/api/ai/route.ts
 import { prisma } from "@/lib/prisma";
-import { isSafeSQL, cleanSQL } from "@/lib/sql-guard";
-import { getAppSchema } from "@/lib/memory/schema-loader";
+import { cleanSQL, isSafeSQL } from "@/lib/sql-guard";
 import { AIProviderFactory } from "@/lib/ai/factory";
+import { getAppSchema } from "@/lib/memory/schema-loader";
 import { PrismaClient } from "@prisma/client";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, x-api-key, X-API-Key",
+  "Access-Control-Allow-Headers":
+    "Content-Type, x-api-key, X-API-Key, x-tenant-id, x-user-id, x-user-email, x-widget-mode",
   "Access-Control-Max-Age": "86400",
 };
 
+type ScopeMode = "auto" | "database" | "tenant" | "user" | "hybrid";
+
+type AppContextConfig = {
+  widgetMode?: "general" | "erp";
+  dataScope?: {
+    mode?: ScopeMode;
+    tenantColumn?: string;
+    userColumn?: string;
+  };
+  routeMap?: Record<string, string>;
+};
+
+type ScopeFilter = {
+  column: string;
+  value: string;
+};
+
+type ChatHistoryItem = {
+  content?: string;
+  isUser?: boolean;
+};
+
+type BotAction =
+  | { type: "navigate"; href: string; label?: string }
+  | {
+      type: "open_record";
+      entity: "invoice" | "product" | "customer" | "staff" | "team" | "task";
+      id: string;
+      label?: string;
+      href?: string;
+      payload?: Record<string, unknown>;
+    }
+  | { type: "show_summary"; entity: string; payload: Record<string, unknown> }
+  | { type: "clarify"; question: string; options?: string[] };
+
+const DEFAULT_ROUTE_MAP: Record<string, string> = {
+  dashboard: "/dashboard",
+  inventory: "/dashboard/inventory",
+  products: "/dashboard/products",
+  sales: "/dashboard/sales",
+  purchases: "/dashboard/purchases",
+  customers: "/dashboard/customers",
+  staff: "/dashboard/staff",
+  teams: "/dashboard/teams",
+  tasks: "/dashboard/tasks",
+  myTasks: "/dashboard/my-tasks",
+  reports: "/dashboard/reports",
+  notifications: "/dashboard/notifications",
+  invoices: "/dashboard/invoices",
+  subscription: "/dashboard/subscription",
+  settings: "/dashboard/settings",
+};
+
+const TENANT_COLUMN_CANDIDATES = [
+  "tenant_id",
+  "tenantid",
+  "company_id",
+  "companyid",
+  "organization_id",
+  "organisation_id",
+  "org_id",
+  "workspace_id",
+  "business_id",
+];
+
+const USER_COLUMN_CANDIDATES = [
+  "user_id",
+  "userid",
+  "owner_id",
+  "employee_user_id",
+  "staff_user_id",
+  "created_by",
+  "created_by_user_id",
+];
+
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS });
-}
-
-// ── Universal tenant filter injection ─────────────────────────────────────────
-function injectTenantFilter(sql: string, tenantId: string): string {
-  if (sql.toLowerCase().includes("tenant_id")) return sql;
-
-  if (/\bWHERE\b/i.test(sql)) {
-    return sql.replace(/\bWHERE\b/i, `WHERE tenant_id = '${tenantId}' AND `);
-  }
-
-  for (const keyword of ["GROUP BY", "ORDER BY", "LIMIT", "HAVING"]) {
-    const re = new RegExp(`\\b${keyword}\\b`, "i");
-    if (re.test(sql)) {
-      return sql.replace(re, `WHERE tenant_id = '${tenantId}' ${keyword}`);
-    }
-  }
-
-  return sql.replace(/;?\s*$/, ` WHERE tenant_id = '${tenantId}'`);
-}
-
-function schemaHasTenantId(schema: object): boolean {
-  return JSON.stringify(schema).toLowerCase().includes("tenant_id");
-}
-
-function friendlyError(msg: string): { message: string; errorType: string } {
-  if (msg === "QUOTA_EXCEEDED")
-    return {
-      message:
-        "AI API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.",
-      errorType: "QUOTA_EXCEEDED",
-    };
-  if (msg === "INVALID_KEY")
-    return {
-      message: "AI API key is invalid. Check your key in Settings.",
-      errorType: "INVALID_KEY",
-    };
-  if (msg === "NO_KEY")
-    return {
-      message: "No AI API key. Go to Settings → add your Gemini/OpenAI key.",
-      errorType: "NO_KEY",
-    };
-  if (msg === "MODEL_NOT_FOUND")
-    return {
-      message:
-        "AI model not found. Update model name in Settings (e.g. gemini-1.5-flash).",
-      errorType: "MODEL_NOT_FOUND",
-    };
-  if (msg.includes("ECONNREFUSED"))
-    return {
-      message:
-        "Cannot connect to local AI. Make sure LM Studio or Ollama is running.",
-      errorType: "CONNECTION_ERROR",
-    };
-  return {
-    message: "AI error: " + msg.replace("AI_ERROR:", "").slice(0, 100),
-    errorType: "AI_ERROR",
-  };
 }
 
 function detectLang(text: string): "ur" | "en" {
@@ -79,45 +97,83 @@ function detectLang(text: string): "ur" | "en" {
     /\b(kya|hai|hain|aap|mujhe|batao|dikhao|kitne|kitni|total|salary|order|sale)\b/i.test(
       text,
     )
-  )
+  ) {
     return "ur";
+  }
   return "en";
+}
+
+function friendlyError(msg: string): { message: string; errorType: string } {
+  if (msg === "QUOTA_EXCEEDED") {
+    return {
+      message:
+        "AI API quota exceeded. Get a new free key from aistudio.google.com and update it in Settings.",
+      errorType: "QUOTA_EXCEEDED",
+    };
+  }
+  if (msg === "INVALID_KEY") {
+    return {
+      message: "AI API key is invalid. Check your key in Settings.",
+      errorType: "INVALID_KEY",
+    };
+  }
+  if (msg === "NO_KEY") {
+    return {
+      message: "No AI API key. Go to Settings and add your Gemini/OpenAI key.",
+      errorType: "NO_KEY",
+    };
+  }
+  if (msg === "MODEL_NOT_FOUND") {
+    return {
+      message:
+        "AI model not found. Update the model name in Settings, for example gemini-1.5-flash.",
+      errorType: "MODEL_NOT_FOUND",
+    };
+  }
+  if (msg.includes("ECONNREFUSED")) {
+    return {
+      message:
+        "Cannot connect to local AI. Make sure LM Studio or Ollama is running.",
+      errorType: "CONNECTION_ERROR",
+    };
+  }
+  return {
+    message: "AI error: " + msg.replace("AI_ERROR:", "").slice(0, 100),
+    errorType: "AI_ERROR",
+  };
 }
 
 function serialize(result: any[]) {
   return result.map((row) => {
-    const obj: any = {};
-    for (const [k, v] of Object.entries(row)) {
-      if (typeof v === "bigint") obj[k] = Number(v);
-      else if (v instanceof Date) obj[k] = v.toISOString();
-      else obj[k] = v;
+    const obj: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (typeof value === "bigint") obj[key] = Number(value);
+      else if (value instanceof Date) obj[key] = value.toISOString();
+      else obj[key] = value;
     }
     return obj;
   });
 }
 
-function filterSmartResult(result: any[], question: string): any[] {
+function filterSmartResult(result: any[]): any[] {
   if (!result?.length) return result;
-  const keys = Object.keys(result[0]);
 
-  const nameKey = keys.find(
-    (k) =>
-      k.toLowerCase() === "name" ||
-      k.toLowerCase() === "item_name" ||
-      k.toLowerCase() === "product_name",
+  const keys = Object.keys(result[0]);
+  const nameKey = keys.find((key) =>
+    ["name", "item_name", "product_name"].includes(key.toLowerCase()),
   );
+
   let filtered = result;
   if (nameKey) {
     filtered = filtered.filter((row) => {
-      const val = String(row[nameKey] || "");
-      return !val.startsWith("[DELETED]") && !val.startsWith("DELETED");
+      const value = String(row[nameKey] || "");
+      return !value.startsWith("[DELETED]") && !value.startsWith("DELETED");
     });
   }
 
   if (nameKey && filtered.length > 0) {
-    const priceKey = keys.find(
-      (k) =>
-        k.toLowerCase().includes("price") || k.toLowerCase().includes("amount"),
+    const priceKey = keys.find((key) =>
+      key.toLowerCase().includes("price") || key.toLowerCase().includes("amount"),
     );
     if (priceKey) {
       const seen = new Map<string, any>();
@@ -137,45 +193,49 @@ function filterSmartResult(result: any[], question: string): any[] {
 
 function needsClarification(
   question: string,
-  schema: object,
   lang: "ur" | "en",
 ): string | null {
   const q = question.toLowerCase().trim();
 
   if (q.split(" ").length <= 2 && !q.includes("?")) {
-    if (lang === "ur")
-      return "آپ کچھ اور تفصیل دے سکتے ہیں؟ مثلاً کس تاریخ کا ڈیٹا چاہیے، یا کون سی مصنوع/صارف کے بارے میں؟";
+    if (lang === "ur") {
+      return "براہ کرم تھوڑی مزید تفصیل دیں، جیسے کس تاریخ، کس پروڈکٹ، یا کس کسٹمر کے بارے میں پوچھ رہے ہیں۔";
+    }
     return "Could you be more specific? For example, which date range, product, or customer are you asking about?";
   }
 
-  const hasAll = /\b(all|سب|تمام)\b/.test(q);
-  const hasFilter =
-    /\b(where|جہاں|جن|filter|date|تاریخ|month|week|year)\b/.test(q);
+  const hasAll = /\b(all|sab|تمام)\b/.test(q);
+  const hasFilter = /\b(where|filter|date|month|week|year|customer|product)\b/.test(
+    q,
+  );
+
   if (hasAll && !hasFilter) {
-    if (lang === "ur")
-      return "کیا آپ سب ریکارڈ دیکھنا چاہتے ہیں؟ بہتر نتیجے کے لیے کوئی فلٹر بتائیں جیسے تاریخ، ماہ، یا صارف کا نام۔";
-    return "Do you want all records? For better results, mention a filter like date, month, or a specific name.";
+    if (lang === "ur") {
+      return "اگر آپ سب ریکارڈز دیکھنا چاہتے ہیں تو بہتر نتیجے کے لیے تاریخ، نام، یا کسی خاص فلٹر کے ساتھ پوچھیں۔";
+    }
+    return "If you want all records, please add a filter like date, month, or a specific name for a better result.";
   }
 
   return null;
 }
 
-function detectViz(result: any[], q: string): string {
+function detectViz(result: any[], question: string): string {
   if (!result?.length) return "none";
-  const ql = q.toLowerCase();
-  if (ql.includes("stacked") || ql.includes("اسٹیکڈ")) return "stacked";
-  if (ql.includes("pie") || ql.includes("پائی")) return "pie";
-  if (ql.includes("bar") || ql.includes("بار")) return "bar";
-  if (ql.includes("line") || ql.includes("trend") || ql.includes("رجحان"))
-    return "line";
-  if (ql.includes("chart") || ql.includes("گراف")) return "bar";
+
+  const q = question.toLowerCase();
+  if (q.includes("stacked")) return "stacked";
+  if (q.includes("pie")) return "pie";
+  if (q.includes("bar")) return "bar";
+  if (q.includes("line") || q.includes("trend")) return "line";
+  if (q.includes("chart")) return "bar";
 
   const keys = Object.keys(result[0]);
-  const numKeys = keys.filter((k) => typeof result[0][k] === "number");
-  const textKeys = keys.filter((k) => typeof result[0][k] !== "number");
-  const isMenuStyle =
-    textKeys.length >= 1 && numKeys.length >= 1 && result.length > 3;
-  if (isMenuStyle) return "table";
+  const numKeys = keys.filter((key) => typeof result[0][key] === "number");
+  const textKeys = keys.filter((key) => typeof result[0][key] !== "number");
+
+  if (textKeys.length >= 1 && numKeys.length >= 1 && result.length > 3) {
+    return "table";
+  }
   if (result.length === 1 && numKeys.length === 1) return "kpi";
   if (result.length > 1 && numKeys.length >= 1) return "line";
   return "table";
@@ -183,7 +243,8 @@ function detectViz(result: any[], q: string): string {
 
 function pivotStacked(result: any[]) {
   if (!result.length || !("category" in result[0])) return result;
-  const map: any = {};
+
+  const map: Record<string, Record<string, unknown>> = {};
   result.forEach((row) => {
     if (!map[row.month]) {
       map[row.month] = {
@@ -198,12 +259,14 @@ function pivotStacked(result: any[]) {
   return Object.values(map);
 }
 
-function getInsights(result: any[], lang: "ur" | "en") {
+function getInsights(result: any[]) {
   if (!result?.length || result.length < 2) return [];
+
   const keys = Object.keys(result[0]);
-  const numKey = keys.find((k) => typeof result[0][k] === "number");
-  const labelKey = keys.find((k) => typeof result[0][k] !== "number");
+  const numKey = keys.find((key) => typeof result[0][key] === "number");
+  const labelKey = keys.find((key) => typeof result[0][key] !== "number");
   if (!numKey || !labelKey) return [];
+
   const sorted = [...result].sort((a, b) => b[numKey] - a[numKey]);
   return [
     `${sorted[0][labelKey]} has the highest value (${Number(sorted[0][numKey]).toLocaleString()}).`,
@@ -211,8 +274,288 @@ function getInsights(result: any[], lang: "ur" | "en") {
   ];
 }
 
+function parseAppContext(raw: string | null | undefined): AppContextConfig {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function escapeSqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function isLikelySafeScopeValue(value: string): boolean {
+  return !!value && value.length <= 160 && !/[\r\n;\0]/.test(value);
+}
+
+function getSchemaColumns(schema: any): Set<string> {
+  const columns = Array.isArray(schema?.tables) ? schema.tables : [];
+  return new Set(
+    columns
+      .map((column: any) => String(column?.column_name || "").toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function findMatchingColumn(
+  schema: object,
+  configuredColumn: string | undefined,
+  candidates: string[],
+): string | null {
+  if (configuredColumn?.trim()) return configuredColumn.trim();
+
+  const columns = getSchemaColumns(schema);
+  for (const candidate of candidates) {
+    if (columns.has(candidate.toLowerCase())) return candidate;
+  }
+  return null;
+}
+
+function buildScopeFilters(args: {
+  schema: object;
+  context: AppContextConfig;
+  tenantId: string;
+  userId: string;
+}) {
+  const mode = args.context.dataScope?.mode || "auto";
+  const tenantColumn = findMatchingColumn(
+    args.schema,
+    args.context.dataScope?.tenantColumn,
+    TENANT_COLUMN_CANDIDATES,
+  );
+  const userColumn = findMatchingColumn(
+    args.schema,
+    args.context.dataScope?.userColumn,
+    USER_COLUMN_CANDIDATES,
+  );
+
+  const filters: ScopeFilter[] = [];
+
+  if (mode === "database") {
+    return { mode, filters, tenantColumn, userColumn };
+  }
+
+  if (
+    ["auto", "tenant", "hybrid"].includes(mode) &&
+    args.tenantId &&
+    tenantColumn &&
+    isLikelySafeScopeValue(args.tenantId)
+  ) {
+    filters.push({ column: tenantColumn, value: args.tenantId });
+  }
+
+  if (
+    ["auto", "user", "hybrid"].includes(mode) &&
+    args.userId &&
+    userColumn &&
+    isLikelySafeScopeValue(args.userId)
+  ) {
+    filters.push({ column: userColumn, value: args.userId });
+  }
+
+  return { mode, filters, tenantColumn, userColumn };
+}
+
+function injectScopeFilters(sql: string, filters: ScopeFilter[]): string {
+  let nextSql = sql;
+
+  for (const filter of filters) {
+    const alreadyScoped = new RegExp(`\\b${filter.column}\\b`, "i").test(nextSql);
+    if (alreadyScoped) continue;
+
+    const condition = `${filter.column} = ${escapeSqlLiteral(filter.value)}`;
+
+    if (/\bWHERE\b/i.test(nextSql)) {
+      nextSql = nextSql.replace(/\bWHERE\b/i, `WHERE ${condition} AND `);
+      continue;
+    }
+
+    let inserted = false;
+    for (const keyword of ["GROUP BY", "ORDER BY", "LIMIT", "HAVING"]) {
+      const re = new RegExp(`\\b${keyword}\\b`, "i");
+      if (re.test(nextSql)) {
+        nextSql = nextSql.replace(re, `WHERE ${condition} ${keyword}`);
+        inserted = true;
+        break;
+      }
+    }
+
+    if (!inserted) {
+      nextSql = nextSql.replace(/;?\s*$/, ` WHERE ${condition}`);
+    }
+  }
+
+  return nextSql;
+}
+
+function getFieldValue(
+  row: Record<string, any>,
+  candidates: readonly string[],
+): any {
+  const entries = Object.entries(row);
+  for (const candidate of candidates) {
+    const found = entries.find(
+      ([key, value]) =>
+        key.toLowerCase() === candidate.toLowerCase() &&
+        value !== null &&
+        value !== undefined &&
+        value !== "",
+    );
+    if (found) return found[1];
+  }
+  return undefined;
+}
+
+function pickSummaryFields(
+  row: Record<string, any>,
+  candidates: readonly string[],
+): Record<string, unknown> {
+  const summary: Record<string, unknown> = {};
+  for (const candidate of candidates) {
+    const value = getFieldValue(row, [candidate]);
+    if (value !== undefined) summary[candidate] = value;
+  }
+  return summary;
+}
+
+function buildErpActions(
+  question: string,
+  result: any[],
+  routeMap: Record<string, string>,
+): BotAction[] {
+  const q = question.toLowerCase();
+  const actions: BotAction[] = [];
+
+  const pageMatchers: Array<{
+    key: keyof typeof DEFAULT_ROUTE_MAP;
+    words: string[];
+    label: string;
+  }> = [
+    { key: "dashboard", words: ["dashboard", "home"], label: "Open dashboard" },
+    { key: "inventory", words: ["inventory", "stock"], label: "Open inventory" },
+    { key: "products", words: ["product", "products"], label: "Open products" },
+    { key: "customers", words: ["customer", "customers", "client"], label: "Open customers" },
+    { key: "sales", words: ["sale", "sales"], label: "Open sales" },
+    { key: "purchases", words: ["purchase", "purchases"], label: "Open purchases" },
+    { key: "tasks", words: ["task", "tasks"], label: "Open tasks" },
+    { key: "reports", words: ["report", "reports"], label: "Open reports" },
+    { key: "invoices", words: ["invoice", "invoices", "bill"], label: "Open invoices" },
+    { key: "staff", words: ["staff", "employee"], label: "Open staff" },
+    { key: "teams", words: ["team", "teams"], label: "Open teams" },
+    { key: "settings", words: ["setting", "settings"], label: "Open settings" },
+  ];
+
+  const pageIntent = pageMatchers.find((item) =>
+    item.words.some((word) => q.includes(word)),
+  );
+  if (pageIntent && routeMap[pageIntent.key]) {
+    actions.push({
+      type: "navigate",
+      href: routeMap[pageIntent.key],
+      label: pageIntent.label,
+    });
+  }
+
+  const entityConfigs = {
+    invoice: {
+      routeKey: "invoices",
+      idFields: ["invoice_number", "invoice_no", "invoice_id", "id", "number"],
+      labelFields: ["invoice_number", "invoice_no", "number", "customer_name", "name"],
+      summaryFields: ["invoice_number", "customer_name", "date", "total", "status", "due_amount"],
+    },
+    product: {
+      routeKey: "products",
+      idFields: ["id", "product_id", "code", "product_code", "barcode"],
+      labelFields: ["product_name", "name", "product_code", "code"],
+      summaryFields: ["product_name", "name", "product_code", "barcode", "stock", "price"],
+    },
+    customer: {
+      routeKey: "customers",
+      idFields: ["id", "customer_id", "code", "customer_code", "email", "phone"],
+      labelFields: ["company_name", "customer_name", "name", "code"],
+      summaryFields: ["company_name", "customer_name", "name", "phone", "email", "balance"],
+    },
+    staff: {
+      routeKey: "staff",
+      idFields: ["id", "staff_id", "employee_id"],
+      labelFields: ["full_name", "name", "employee_id"],
+      summaryFields: ["full_name", "name", "employee_id", "role", "shift"],
+    },
+    team: {
+      routeKey: "teams",
+      idFields: ["id", "team_id", "name"],
+      labelFields: ["name", "team_name"],
+      summaryFields: ["name", "team_name", "lead", "leader"],
+    },
+    task: {
+      routeKey: "tasks",
+      idFields: ["id", "task_id", "title"],
+      labelFields: ["title", "name", "task_name"],
+      summaryFields: ["title", "assignee", "status", "priority", "deadline"],
+    },
+  } as const;
+
+  const detectedEntity = (Object.keys(entityConfigs) as Array<
+    keyof typeof entityConfigs
+  >).find(
+    (entity) => q.includes(entity) || (entity === "invoice" && q.includes("bill")),
+  );
+
+  if (!detectedEntity || !Array.isArray(result) || result.length === 0) {
+    return actions;
+  }
+
+  const config = entityConfigs[detectedEntity];
+
+  if (result.length > 1) {
+    const options = result.slice(0, 3).map((row) => {
+      const label =
+        getFieldValue(row, config.labelFields) ?? getFieldValue(row, config.idFields);
+      return String(label ?? "Record");
+    });
+    actions.push({
+      type: "clarify",
+      question: `I found multiple ${detectedEntity}s. Which one do you want to open?`,
+      options,
+    });
+    return actions;
+  }
+
+  const row = result[0] as Record<string, any>;
+  const recordId = getFieldValue(row, config.idFields);
+  const label = getFieldValue(row, config.labelFields);
+  const href = routeMap[config.routeKey];
+  const payload = pickSummaryFields(row, config.summaryFields);
+
+  if (recordId !== undefined && recordId !== null) {
+    actions.push({
+      type: "open_record",
+      entity: detectedEntity,
+      id: String(recordId),
+      label: label ? `Open ${label}` : `Open ${detectedEntity}`,
+      href,
+      payload,
+    });
+  } else if (Object.keys(payload).length > 0) {
+    actions.push({
+      type: "show_summary",
+      entity: detectedEntity,
+      payload,
+    });
+  }
+
+  return actions;
+}
+
 export async function POST(req: Request) {
-  // ── 1. Read API key from header ───────────────────────────────────────────
   const apiKey =
     req.headers.get("x-api-key") || req.headers.get("X-API-Key") || "";
 
@@ -223,27 +566,31 @@ export async function POST(req: Request) {
     );
   }
 
-  // ── 2. Parse body first — userId/userEmail now come from body ─────────────
-  const {
-    question,
-    preferredLang,
-    tenant_id,
-    chatHistory,
-    userId: bodyUserId,
-    userEmail: bodyUserEmail,
-  } = await req.json();
+  const body = await req.json();
+  const question = normalizeValue(body?.question);
+  const preferredLang = body?.preferredLang;
+  const tenantId =
+    normalizeValue(body?.tenant_id) ||
+    normalizeValue(req.headers.get("x-tenant-id"));
+  const userId =
+    normalizeValue(body?.userId) || normalizeValue(req.headers.get("x-user-id"));
+  const userEmail =
+    normalizeValue(body?.userEmail) ||
+    normalizeValue(req.headers.get("x-user-email"));
+  const widgetModeFromRequest =
+    normalizeValue(body?.widgetMode) ||
+    normalizeValue(req.headers.get("x-widget-mode"));
+  const chatHistory = Array.isArray(body?.chatHistory)
+    ? (body.chatHistory as ChatHistoryItem[])
+    : [];
 
-  // ── 3. Resolve userId / userEmail from body ───────────────────────────────
-  const userId: string = bodyUserId || "";
-  const userEmail: string = bodyUserEmail || "";
-
-  if (!question?.trim())
+  if (!question) {
     return Response.json(
       { error: "Question is required." },
       { status: 400, headers: CORS },
     );
+  }
 
-  // ── 4. Look up the connected app ──────────────────────────────────────────
   const app = await prisma.connectedApp.findUnique({
     where: { apiKey },
     select: {
@@ -254,8 +601,7 @@ export async function POST(req: Request) {
       aiProvider: true,
       aiModel: true,
       aiBaseUrl: true,
-      schemaJson: true,
-      schemaBuiltAt: true,
+      contextJson: true,
     },
   });
 
@@ -265,6 +611,7 @@ export async function POST(req: Request) {
       { status: 401, headers: CORS },
     );
   }
+
   if (!app.dbUrl) {
     return Response.json(
       { error: "No database URL. Add it in Settings.", errorType: "NO_DB" },
@@ -272,7 +619,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // ── 5. Language detection ─────────────────────────────────────────────────
   const detectedLang =
     preferredLang === "ur"
       ? "ur"
@@ -280,7 +626,6 @@ export async function POST(req: Request) {
         ? "en"
         : detectLang(question);
 
-  // ── 6. AI provider setup ──────────────────────────────────────────────────
   const providerType = (app.aiProvider || "GEMINI").toLowerCase();
   const aiApiKey = app.geminiKey || undefined;
   const aiBaseUrl = app.aiBaseUrl || undefined;
@@ -289,23 +634,40 @@ export async function POST(req: Request) {
     type: providerType as any,
   });
 
-  // ── 7. Load schema ────────────────────────────────────────────────────────
   let schema: object = {};
   try {
     schema = await getAppSchema(app.id);
   } catch {}
 
-  // ── 8. Tenant resolution ──────────────────────────────────────────────────
-  const hasTenantColumn = schemaHasTenantId(schema);
-  const effectiveTenantId =
-    tenant_id && hasTenantColumn ? String(tenant_id).trim() : null;
-  const isValidUuid = effectiveTenantId
-    ? /^[0-9a-f-]{32,36}$/i.test(effectiveTenantId)
-    : false;
-  const safeTenantId = isValidUuid ? effectiveTenantId : null;
+  const appContext = parseAppContext(app.contextJson);
+  const widgetMode =
+    widgetModeFromRequest === "erp" || appContext.widgetMode === "erp"
+      ? "erp"
+      : "general";
+  const scope = buildScopeFilters({
+    schema,
+    context: appContext,
+    tenantId,
+    userId,
+  });
 
-  // ── 9. Clarification check ────────────────────────────────────────────────
-  const clarify = needsClarification(question, schema, detectedLang);
+  if (
+    widgetMode === "erp" &&
+    scope.mode !== "database" &&
+    !scope.filters.length &&
+    (tenantId || userId || scope.tenantColumn || scope.userColumn)
+  ) {
+    return Response.json(
+      {
+        error:
+          "No valid tenant or user scope could be applied for this ERP widget. Configure Connected Apps scope settings or pass the ERP tenant/user id.",
+        errorType: "MISSING_SCOPE",
+      },
+      { status: 400, headers: CORS },
+    );
+  }
+
+  const clarify = needsClarification(question, detectedLang);
   if (clarify) {
     return Response.json(
       {
@@ -315,6 +677,7 @@ export async function POST(req: Request) {
         sql: null,
         result: null,
         visualization: "none",
+        actions: [],
         insights: [],
         chatLogId: null,
       },
@@ -322,36 +685,46 @@ export async function POST(req: Request) {
     );
   }
 
-  // ── 10. Build context prompt ──────────────────────────────────────────────
   let contextPrompt = question;
-  if (chatHistory?.length) {
+  if (chatHistory.length) {
     const recent = chatHistory.slice(-4);
-    const ctx = recent
-      .map((m: any) =>
-        m.isUser
-          ? `User: ${m.content}`
-          : `Assistant result: ${m.content?.slice(0, 100)}`,
+    const historyText = recent
+      .map((item) =>
+        item.isUser
+          ? `User: ${item.content || ""}`
+          : `Assistant result: ${String(item.content || "").slice(0, 120)}`,
       )
       .join("\n");
-    contextPrompt = `Previous context:\n${ctx}\n\nCurrent question: ${question}`;
+    contextPrompt = `Previous context:\n${historyText}\n\nCurrent question: ${question}`;
   }
+
+  const scopeHint =
+    scope.filters.length > 0
+      ? `IMPORTANT: Apply these filters to every query: ${scope.filters
+          .map((filter) => `${filter.column} = ${escapeSqlLiteral(filter.value)}`)
+          .join(" AND ")}. Never return data outside this scope.`
+      : scope.mode === "database"
+        ? "IMPORTANT: This app uses one isolated database per customer. Keep queries read-only and only fetch records needed for the request."
+        : "IMPORTANT: Keep queries read-only, precise, and limited to only the records needed for the request.";
+
+  const promptPrefix =
+    widgetMode === "erp"
+      ? "[ERP widget mode: only support safe read-only ERP help. Prefer locating the requested invoice, product, customer, staff member, team, or task. Do not behave like a general database assistant.]"
+      : "";
 
   const schemaWithHint = {
     ...schema,
-    _hint: safeTenantId
-      ? `IMPORTANT: This is a multi-tenant database. ALWAYS include tenant_id = '${safeTenantId}' in every query. Never return data from other tenants. Also add WHERE name NOT LIKE '[DELETED]%' to exclude soft-deleted records. Use DISTINCT to avoid duplicates.`
-      : `IMPORTANT: Exclude soft-deleted records (WHERE name NOT LIKE '[DELETED]%'). Use DISTINCT to avoid duplicates.`,
+    _hint:
+      `${scopeHint} ` +
+      "Exclude soft-deleted records when name is prefixed with [DELETED]. Use DISTINCT to avoid duplicates.",
   };
 
-  const tenantScopedQuestion = safeTenantId
-    ? `[Scope ALL queries to tenant_id = '${safeTenantId}'. Never omit this filter.]\n\n${contextPrompt}`
-    : contextPrompt;
+  const prompt = `${promptPrefix}\n${scopeHint}\nUser ID: ${userId || "unknown"}\nUser Email: ${userEmail || "unknown"}\n\n${contextPrompt}`.trim();
 
-  // ── 11. Generate SQL ──────────────────────────────────────────────────────
-  let sql: string;
+  let sql = "";
   try {
     const raw = await provider.generateSQL(
-      tenantScopedQuestion,
+      prompt,
       JSON.stringify(schemaWithHint),
       aiApiKey,
       aiBaseUrl,
@@ -366,44 +739,52 @@ export async function POST(req: Request) {
     );
   }
 
-  // ── 12. Inject tenant filter as safety net ────────────────────────────────
-  if (safeTenantId) {
-    sql = injectTenantFilter(sql, safeTenantId);
+  if (scope.filters.length) {
+    sql = injectScopeFilters(sql, scope.filters);
   }
 
   if (!isSafeSQL(sql)) {
-    console.error("Unsafe SQL blocked:", sql);
     return Response.json(
       { error: "Unsafe SQL blocked.", errorType: "UNSAFE_SQL" },
       { status: 400, headers: CORS },
     );
   }
 
-  // ── 13. Execute against user's database ──────────────────────────────────
   const userPrisma = new PrismaClient({
     datasources: { db: { url: app.dbUrl } },
   });
 
   try {
-    const raw2 = (await userPrisma.$queryRawUnsafe(sql)) as any[];
-    let result = serialize(raw2);
-    result = filterSmartResult(result, question);
-    const viz = detectViz(result, question);
-    if (viz === "stacked") result = pivotStacked(result);
+    const rawResult = (await userPrisma.$queryRawUnsafe(sql)) as any[];
+    let result = serialize(rawResult);
+    result = filterSmartResult(result);
+    const visualization = detectViz(result, question);
+    if (visualization === "stacked") result = pivotStacked(result);
 
     let explanation =
       detectedLang === "ur"
         ? `${result.length} نتائج ملے۔`
         : `Found ${result.length} result(s).`;
+
     try {
       explanation = await provider.generateExplanation(
-        detectedLang === "ur" ? `${question}\n\nجواب اردو میں دیں۔` : question,
+        detectedLang === "ur"
+          ? `${question}\n\nجواب اردو میں دیں۔`
+          : question,
         result,
         aiApiKey,
         aiBaseUrl,
         aiModel,
       );
     } catch {}
+
+    const actions =
+      widgetMode === "erp"
+        ? buildErpActions(question, result, {
+            ...DEFAULT_ROUTE_MAP,
+            ...(appContext.routeMap || {}),
+          })
+        : [];
 
     const log = await prisma.chatLog
       .create({
@@ -431,15 +812,15 @@ export async function POST(req: Request) {
         explanation,
         sql,
         result,
-        visualization: viz,
-        insights: getInsights(result, detectedLang),
+        visualization,
+        actions,
+        insights: getInsights(result),
         detectedLang,
         chatLogId: log?.id,
       },
       { headers: CORS },
     );
   } catch (err: any) {
-    // ── 14. Auto-fix on SQL error ─────────────────────────────────────────
     try {
       const rawFixed = await provider.fixSQL(
         sql,
@@ -449,24 +830,25 @@ export async function POST(req: Request) {
         aiBaseUrl,
         aiModel,
       );
-      let fixedSql = cleanSQL(rawFixed);
 
-      if (safeTenantId) {
-        fixedSql = injectTenantFilter(fixedSql, safeTenantId);
+      let fixedSql = cleanSQL(rawFixed);
+      if (scope.filters.length) {
+        fixedSql = injectScopeFilters(fixedSql, scope.filters);
       }
 
       if (!isSafeSQL(fixedSql)) throw new Error("Fixed SQL unsafe");
 
-      const raw2 = (await userPrisma.$queryRawUnsafe(fixedSql)) as any[];
-      let result = serialize(raw2);
-      result = filterSmartResult(result, question);
-      const viz = detectViz(result, question);
-      if (viz === "stacked") result = pivotStacked(result);
+      const rawResult = (await userPrisma.$queryRawUnsafe(fixedSql)) as any[];
+      let result = serialize(rawResult);
+      result = filterSmartResult(result);
+      const visualization = detectViz(result, question);
+      if (visualization === "stacked") result = pivotStacked(result);
 
       let explanation =
         detectedLang === "ur"
           ? `${result.length} نتائج ملے۔`
           : `Found ${result.length} result(s).`;
+
       try {
         explanation = await provider.generateExplanation(
           detectedLang === "ur"
@@ -478,6 +860,14 @@ export async function POST(req: Request) {
           aiModel,
         );
       } catch {}
+
+      const actions =
+        widgetMode === "erp"
+          ? buildErpActions(question, result, {
+              ...DEFAULT_ROUTE_MAP,
+              ...(appContext.routeMap || {}),
+            })
+          : [];
 
       const log = await prisma.chatLog
         .create({
@@ -505,8 +895,9 @@ export async function POST(req: Request) {
           explanation,
           sql: fixedSql,
           result,
-          visualization: viz,
-          insights: getInsights(result, detectedLang),
+          visualization,
+          actions,
+          insights: getInsights(result),
           detectedLang,
           chatLogId: log?.id,
         },
@@ -524,6 +915,7 @@ export async function POST(req: Request) {
           },
         })
         .catch(() => {});
+
       const fe = friendlyError(fixErr.message);
       return Response.json(
         { error: fe.message, errorType: fe.errorType },

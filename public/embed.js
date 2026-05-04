@@ -1,7 +1,7 @@
 // public/embed.js
 // Paste this in ANY app: <script src="https://your-awkt.vercel.app/embed.js" data-api-key="YOUR_KEY"></script>
 // Optional: Pass user info for auto-recognition
-// <script src="..." data-api-key="YOUR_KEY" data-user-id="123" data-user-email="user@erp.com"></script>
+// <script src="..." data-api-key="YOUR_KEY" data-widget-mode="erp" data-tenant-id="TENANT_ID" data-user-id="123" data-user-email="user@erp.com"></script>
 
 (function () {
   "use strict";
@@ -11,21 +11,28 @@
 
   var tag = document.currentScript;
   var API_KEY = tag ? tag.getAttribute("data-api-key") : "";
+  var TENANT_ID = tag ? tag.getAttribute("data-tenant-id") || "" : "";
   var USER_ID = tag ? tag.getAttribute("data-user-id") || "" : "";
   var USER_EMAIL = tag ? tag.getAttribute("data-user-email") || "" : "";
+  var WIDGET_MODE = tag ? tag.getAttribute("data-widget-mode") || "general" : "general";
   var BASE = tag ? new URL(tag.src).origin : "";
+  var PARENT_ORIGIN = window.location.origin;
   var WIDGET =
     BASE +
     "/widget?key=" +
     encodeURIComponent(API_KEY) +
+    (TENANT_ID ? "&tenantId=" + encodeURIComponent(TENANT_ID) : "") +
     (USER_ID ? "&userId=" + encodeURIComponent(USER_ID) : "") +
-    (USER_EMAIL ? "&userEmail=" + encodeURIComponent(USER_EMAIL) : "");
+    (USER_EMAIL ? "&userEmail=" + encodeURIComponent(USER_EMAIL) : "") +
+    (WIDGET_MODE ? "&widgetMode=" + encodeURIComponent(WIDGET_MODE) : "") +
+    "&parentOrigin=" +
+    encodeURIComponent(PARENT_ORIGIN);
 
   // Styles
   var style = document.createElement("style");
   style.textContent = [
-    "#_awkt-btn{position:fixed;bottom:24px;right:24px;width:58px;height:58px;border-radius:50%;background:#4f46e5;border:none;cursor:pointer;",
-    "box-shadow:0 4px 20px rgba(79,70,229,.4);display:flex;align-items:center;justify-content:center;z-index:2147483646;transition:transform .2s,background .2s;}",
+    "#_awkt-btn{position:fixed;bottom:24px;right:24px;width:58px;height:58px;border-radius:50%;background:#e8ff47;border:none;cursor:pointer;",
+    "box-shadow:0 4px 20px rgba(232,255,71,.28);display:flex;align-items:center;justify-content:center;z-index:2147483646;transition:transform .2s,background .2s;}",
     "#_awkt-btn:hover{transform:scale(1.1);}",
     "#_awkt-btn svg{width:26px;height:26px;pointer-events:none;}",
     "#_awkt-wrap{position:fixed;bottom:96px;right:24px;width:380px;height:580px;border-radius:18px;overflow:hidden;",
@@ -43,7 +50,7 @@
   btn.id = "_awkt-btn";
   btn.setAttribute("aria-label", "Open AI chat assistant");
   btn.innerHTML =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+    '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
   document.body.appendChild(btn);
 
   // Iframe wrap
@@ -73,11 +80,11 @@
         loaded = true;
       }
       wrap.classList.add("on");
-      btn.style.background = "#3730a3";
+      btn.style.background = "#d8ef35";
       btn.querySelector("svg").innerHTML = ICON_X;
     } else {
       wrap.classList.remove("on");
-      btn.style.background = "#4f46e5";
+      btn.style.background = "#e8ff47";
       btn.querySelector("svg").innerHTML = ICON_CHAT;
     }
   }
@@ -89,5 +96,23 @@
 
   document.addEventListener("click", function (e) {
     if (open && !wrap.contains(e.target) && e.target !== btn) toggle();
+  });
+
+  window.addEventListener("message", function (event) {
+    if (!event || !event.data || event.data.type !== "AWKTLD_WIDGET_ACTION") return;
+    if (event.origin !== BASE || event.source !== iframe.contentWindow) return;
+
+    var detail = event.data.action;
+    try {
+      window.dispatchEvent(
+        new CustomEvent("awktld:action", {
+          detail: detail,
+        }),
+      );
+    } catch {}
+
+    if (window.AWKTLDWidget && typeof window.AWKTLDWidget.onAction === "function") {
+      window.AWKTLDWidget.onAction(detail);
+    }
   });
 })();

@@ -15,15 +15,35 @@ interface App {
   schemaBuiltAt: string | null;
   dbType: string;
   geminiKey?: string;
+  contextJson?: string | null;
 }
 
 const BASE_URL = "https://awk-tld-bot.vercel.app";
+
+function parseContext(raw?: string | null) {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
 
 export default function WidgetSitesPage() {
   const [apps, setApps] = useState<App[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", origin: "", dbUrl: "", dbType: "POSTGRESQL", geminiKey: "" });
+  const [form, setForm] = useState({
+    name: "",
+    origin: "",
+    dbUrl: "",
+    dbType: "POSTGRESQL",
+    geminiKey: "",
+    widgetMode: "erp",
+    scopeMode: "auto",
+    tenantColumn: "tenant_id",
+    userColumn: "user_id",
+  });
   const [showForm, setShowForm] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [rebuildingId, setRebuildingId] = useState<string | null>(null);
@@ -42,15 +62,40 @@ export default function WidgetSitesPage() {
   async function createApp() {
     if (!form.name || !form.dbUrl) return;
     setCreating(true);
+    const contextJson = {
+      widgetMode: form.widgetMode,
+      dataScope: {
+        mode: form.scopeMode,
+        tenantColumn: form.tenantColumn || undefined,
+        userColumn: form.userColumn || undefined,
+      },
+    };
     const res = await fetch("/api/widget/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({
+        name: form.name,
+        origin: form.origin,
+        dbUrl: form.dbUrl,
+        dbType: form.dbType,
+        geminiKey: form.geminiKey,
+        contextJson,
+      }),
     });
     const data = await res.json();
     setNewApp({ apiKey: data.apiKey, snippet: data.snippet, name: data.name });
     setShowForm(false);
-    setForm({ name: "", origin: "", dbUrl: "", dbType: "POSTGRESQL", geminiKey: "" });
+    setForm({
+      name: "",
+      origin: "",
+      dbUrl: "",
+      dbType: "POSTGRESQL",
+      geminiKey: "",
+      widgetMode: "erp",
+      scopeMode: "auto",
+      tenantColumn: "tenant_id",
+      userColumn: "user_id",
+    });
     setCreating(false);
     fetchApps();
   }
@@ -178,6 +223,37 @@ export default function WidgetSitesPage() {
                   placeholder="https://myerp.vercel.app"
                   className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors" />
               </div>
+              <div>
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Widget Mode</label>
+                <select value={form.widgetMode} onChange={e => setForm(f => ({ ...f, widgetMode: e.target.value }))}
+                  className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47]">
+                  <option value="erp">ERP safe mode</option>
+                  <option value="general">General chat mode</option>
+                </select>
+              </div>
+              <div>
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Data Scope</label>
+                <select value={form.scopeMode} onChange={e => setForm(f => ({ ...f, scopeMode: e.target.value }))}
+                  className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47]">
+                  <option value="auto">Auto detect</option>
+                  <option value="database">One database per customer</option>
+                  <option value="tenant">Filter by tenant column</option>
+                  <option value="user">Filter by user column</option>
+                  <option value="hybrid">Filter by tenant and user</option>
+                </select>
+              </div>
+              <div>
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Tenant Column</label>
+                <input value={form.tenantColumn} onChange={e => setForm(f => ({ ...f, tenantColumn: e.target.value }))}
+                  placeholder="tenant_id"
+                  className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors font-mono" />
+              </div>
+              <div>
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">User Column</label>
+                <input value={form.userColumn} onChange={e => setForm(f => ({ ...f, userColumn: e.target.value }))}
+                  placeholder="user_id"
+                  className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors font-mono" />
+              </div>
             </div>
             <div className="flex gap-3 pt-2">
               <button onClick={createApp} disabled={creating || !form.name || !form.dbUrl}
@@ -203,7 +279,11 @@ export default function WidgetSitesPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {apps.map(app => (
+          {apps.map(app => {
+            const context = parseContext(app.contextJson);
+            const widgetMode = context?.widgetMode || "general";
+            const scopeMode = context?.dataScope?.mode || "auto";
+            return (
             <div key={app.id} className="border border-[#1e1e1e] bg-[#0d0d0d] hover:border-[#2a2a2a] transition-colors">
               <div className="flex items-start justify-between gap-4 p-5">
                 <div className="flex-1 min-w-0">
@@ -213,6 +293,8 @@ export default function WidgetSitesPage() {
                       {app.isActive ? "ACTIVE" : "INACTIVE"}
                     </span>
                     <span className="fm text-[9px] bg-[#1e1e1e] text-[#5a5a5a] px-2 py-0.5">{app.dbType}</span>
+                    <span className="fm text-[9px] bg-[#1e1e1e] text-[#5a5a5a] px-2 py-0.5">{widgetMode.toUpperCase()}</span>
+                    <span className="fm text-[9px] bg-[#1e1e1e] text-[#5a5a5a] px-2 py-0.5">SCOPE {scopeMode.toUpperCase()}</span>
                     {app.geminiKey && <span className="fm text-[9px] bg-[#e8ff47]/10 text-[#e8ff47] px-2 py-0.5">GEMINI ✓</span>}
                   </div>
                   <p className="fm text-[10px] text-[#3a3a3a] truncate mb-1">{app.apiKey}</p>
@@ -243,17 +325,17 @@ export default function WidgetSitesPage() {
               <div className="mx-5 mb-5 bg-black border border-[#1e1e1e] p-3 relative">
                 <p className="fm text-[10px] text-[#3a3a3a] mb-1.5">// Embed in your app before &lt;/body&gt;:</p>
                 <code className="fm text-xs text-[#e8ff47] break-all">
-                  {`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}"></script>`}
+                  {`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="${widgetMode}" data-tenant-id="ERP_TENANT_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`}
                 </code>
                 <button
-                  onClick={() => copy(`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}"></script>`, app.id + "s")}
+                  onClick={() => copy(`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="${widgetMode}" data-tenant-id="ERP_TENANT_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`, app.id + "s")}
                   className="absolute top-3 right-3 fm text-[10px] bg-[#1e1e1e] text-[#5a5a5a] px-2 py-1 hover:text-[#e8ff47] transition-colors"
                 >
                   {copied === app.id + "s" ? "✓" : "Copy"}
                 </button>
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
     </div>
