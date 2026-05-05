@@ -1,14 +1,12 @@
-// middleware.ts
-// Lightweight — no heavy auth import, just cookie check
-// Fixes: Edge Function size 1.02MB > 1MB limit
+// proxy.ts
+// Lightweight request gate: keep auth imports out of this file to avoid large edge bundles.
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Protect /dashboard — check session cookie exists
   if (pathname.startsWith("/dashboard")) {
     const session =
       req.cookies.get("authjs.session-token") ||
@@ -21,7 +19,6 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  // CORS for /api/ai (widget calls from external sites)
   if (pathname.startsWith("/api/ai")) {
     if (req.method === "OPTIONS") {
       return new NextResponse(null, {
@@ -29,14 +26,19 @@ export function middleware(req: NextRequest) {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, x-api-key",
+          "Access-Control-Allow-Headers":
+            "Content-Type, x-api-key, X-API-Key, x-tenant-id, x-user-id, x-user-email, x-widget-mode",
         },
       });
     }
+
     const res = NextResponse.next();
     res.headers.set("Access-Control-Allow-Origin", "*");
     res.headers.set("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-    res.headers.set("Access-Control-Allow-Headers", "Content-Type, x-api-key");
+    res.headers.set(
+      "Access-Control-Allow-Headers",
+      "Content-Type, x-api-key, X-API-Key, x-tenant-id, x-user-id, x-user-email, x-widget-mode",
+    );
     return res;
   }
 

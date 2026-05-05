@@ -63,7 +63,7 @@ export default function ChatHistory({ appId, onSelectLog }: Props) {
   }
 
   return (
-    <div className="space-y-2" style={{ fontFamily: "'DM Sans',sans-serif" }}>
+    <div className="space-y-2.5" style={{ fontFamily: "'DM Sans',sans-serif" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');.fd{font-family:'Bebas Neue',sans-serif;}.fm{font-family:'Space Mono',monospace;}`}</style>
 
       {logs.map((log) => (
@@ -72,14 +72,14 @@ export default function ChatHistory({ appId, onSelectLog }: Props) {
           className="border border-[#1e1e1e] bg-[#0d0d0d] hover:border-[#2a2a2a] transition-colors"
         >
           <div
-            className="flex items-start justify-between gap-4 p-4 cursor-pointer"
+            className="flex items-start justify-between gap-3 p-3 cursor-pointer"
             onClick={() => {
               if (onSelectLog) onSelectLog(log);
               else setExpandedId(expandedId === log.id ? null : log.id);
             }}
           >
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-1.5 mb-2 min-w-0">
                 <span
                   className={`fm text-[9px] px-1.5 py-0.5 ${
                     log.wasSuccessful
@@ -94,21 +94,26 @@ export default function ChatHistory({ appId, onSelectLog }: Props) {
                     {log.detectedLang}
                   </span>
                 )}
-                <span className="fm text-[9px] text-[#3a3a3a]">
-                  {new Date(log.createdAt).toLocaleString()}
+                <span className="fm text-[9px] text-[#3a3a3a] truncate">
+                  {new Date(log.createdAt).toLocaleString([], {
+                    month: "2-digit",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
                 </span>
               </div>
               {/* User question — shown as user bubble */}
               <div className="flex justify-end mb-2">
-                <div className="max-w-[80%] bg-[#e8ff47] text-black px-3 py-2 text-sm rounded-none">
-                  <p dir="auto">{log.question}</p>
+                <div className="max-w-[88%] bg-[#e8ff47] text-black px-3 py-2 text-sm rounded-none">
+                  <p className="line-clamp-3" dir="auto">{log.question}</p>
                 </div>
               </div>
               {/* Bot answer — shown as bot bubble */}
               {log.explanation && (
                 <div className="flex justify-start">
-                  <div className="max-w-[80%] bg-[#1a1a1a] border border-[#2a2a2a] text-white px-3 py-2 text-sm">
-                    <p dir="auto">{log.explanation}</p>
+                  <div className="max-w-[88%] bg-[#1a1a1a] border border-[#2a2a2a] text-white px-3 py-2 text-sm">
+                    <p className="line-clamp-4" dir="auto">{log.explanation}</p>
                   </div>
                 </div>
               )}

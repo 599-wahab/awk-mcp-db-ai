@@ -290,7 +290,7 @@ export default function DashboardPage() {
         >
           <div className="absolute inset-0 bg-black/70 lg:hidden" onClick={() => setShowHistory(false)} />
 
-          <aside className="relative z-10 w-72 max-w-[85vw] lg:w-64 xl:w-72 h-full border-r border-[#1e1e1e] bg-[#080808] flex flex-col shrink-0">
+          <aside className="relative z-10 w-80 max-w-[88vw] lg:w-80 xl:w-[22rem] h-full border-r border-[#1e1e1e] bg-[#080808] flex flex-col shrink-0">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e1e]">
               <p className="fm text-[10px] text-[#e8ff47] uppercase tracking-wider">
                 // {isUr ? "پرانی گفتگو" : "Chat History"}
@@ -306,7 +306,7 @@ export default function DashboardPage() {
               + {isUr ? "نئی گفتگو" : "NEW CHAT"}
             </button>
 
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto px-3 pb-3">
               <ChatHistory appId={currentAppId} onSelectLog={restoreChat} />
             </div>
           </aside>
@@ -365,7 +365,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 scroll-smooth">
+        <div className="flex-1 overflow-y-auto px-3 sm:px-5 lg:px-6 py-4 space-y-4 scroll-smooth">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center gap-4 px-4 py-8">
               <div className="fd text-[clamp(3rem,12vw,6rem)] text-[#1e1e1e] leading-none">ASK</div>
@@ -394,14 +394,14 @@ export default function DashboardPage() {
                 <div
                   className={`
                     relative rounded-none
-                    ${msg.isUser ? "max-w-[85%] sm:max-w-[70%]" : "w-full max-w-full sm:max-w-[90%]"}
+                    ${msg.isUser ? "max-w-[85%] sm:max-w-[620px]" : "w-fit max-w-[min(860px,92%)]"}
                     ${msg.isUser ? "text-black"
                       : msg.isError ? "bg-red-500/10 border border-red-500/30 text-white"
                       : "bg-black border border-[#1e1e1e] text-white"}
                   `}
                   style={msg.isUser ? { background: "#e8ff47" } : {}}
                 >
-                  <div className="px-3 py-2.5">
+                  <div className="px-3.5 py-3">
                     <div className="flex items-center justify-between gap-2 mb-1.5">
                       <p className={`fm text-[9px] ${msg.isUser ? "text-black/50" : msg.isError ? "text-red-400" : "text-[#3a3a3a]"}`}>
                         {msg.isUser ? (isUr ? "آپ" : "YOU")
@@ -414,7 +414,7 @@ export default function DashboardPage() {
                       </p>
                     </div>
 
-                    <p className={`whitespace-pre-wrap leading-relaxed ${msgSize}`} dir="auto">
+                    <p className={`whitespace-pre-wrap leading-relaxed ${msgSize} max-w-prose`} dir="auto">
                       {msg.content}
                     </p>
 
@@ -431,7 +431,7 @@ export default function DashboardPage() {
                     )}
 
                     {!msg.isUser && !msg.isError && isChartable && (
-                      <div className="mt-3">
+                      <div className="mt-3 w-[min(820px,calc(100vw-48px))] max-w-full">
                         <div className="flex gap-1 mb-2 flex-wrap">
                           {["line","bar","stacked","pie"].map(t => (
                             <button key={t}

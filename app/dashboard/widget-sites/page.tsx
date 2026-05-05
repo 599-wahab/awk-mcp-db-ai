@@ -41,6 +41,7 @@ export default function WidgetSitesPage() {
     geminiKey: "",
     widgetMode: "erp",
     scopeMode: "auto",
+    tenantId: "",
     tenantColumn: "tenant_id",
     userColumn: "user_id",
   });
@@ -61,11 +62,16 @@ export default function WidgetSitesPage() {
 
   async function createApp() {
     if (!form.name || !form.dbUrl) return;
+    if (form.scopeMode !== "database" && !form.tenantId.trim()) {
+      alert("Tenant ID is required for shared multi-tenant databases.");
+      return;
+    }
     setCreating(true);
     const contextJson = {
       widgetMode: form.widgetMode,
       dataScope: {
         mode: form.scopeMode,
+        tenantId: form.tenantId || undefined,
         tenantColumn: form.tenantColumn || undefined,
         userColumn: form.userColumn || undefined,
       },
@@ -93,6 +99,7 @@ export default function WidgetSitesPage() {
       geminiKey: "",
       widgetMode: "erp",
       scopeMode: "auto",
+      tenantId: "",
       tenantColumn: "tenant_id",
       userColumn: "user_id",
     });
@@ -242,6 +249,13 @@ export default function WidgetSitesPage() {
                   <option value="hybrid">Filter by tenant and user</option>
                 </select>
               </div>
+              <div className="col-span-2">
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Tenant ID *</label>
+                <input value={form.tenantId} onChange={e => setForm(f => ({ ...f, tenantId: e.target.value }))}
+                  placeholder="e.g. tenants.id for this company"
+                  className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors font-mono" />
+                <p className="fm text-[10px] text-[#3a3a3a] mt-1">// Required for shared multi-tenant databases. Leave empty only when scope is one database per customer.</p>
+              </div>
               <div>
                 <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Tenant Column</label>
                 <input value={form.tenantColumn} onChange={e => setForm(f => ({ ...f, tenantColumn: e.target.value }))}
@@ -256,7 +270,7 @@ export default function WidgetSitesPage() {
               </div>
             </div>
             <div className="flex gap-3 pt-2">
-              <button onClick={createApp} disabled={creating || !form.name || !form.dbUrl}
+              <button onClick={createApp} disabled={creating || !form.name || !form.dbUrl || (form.scopeMode !== "database" && !form.tenantId.trim())}
                 className="fd text-lg tracking-wide px-8 py-2.5 text-black disabled:opacity-50 transition hover:-translate-y-0.5"
                 style={{ background: "#e8ff47" }}>
                 {creating ? "CREATING..." : "CREATE APP"}

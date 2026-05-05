@@ -1,8 +1,14 @@
 import { prisma } from "@/lib/prisma";
-import { cleanSQL, isSafeSQL } from "@/lib/sql-guard";
+import {
+  cleanSQL,
+  injectTenantScopeSQL,
+  isSafeSQL,
+  validateTenantScopedSQL,
+} from "@/lib/sql-guard";
 import { AIProviderFactory } from "@/lib/ai/factory";
 import { getAppSchema } from "@/lib/memory/schema-loader";
 import { PrismaClient } from "@prisma/client";
+import { auth } from "@/lib/auth";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -20,6 +26,9 @@ type AppContextConfig = {
     mode?: ScopeMode;
     tenantColumn?: string;
     userColumn?: string;
+    tenantId?: string;
+    fixedTenantId?: string;
+    trustedTenantId?: string;
   };
   routeMap?: Record<string, string>;
 };
@@ -32,6 +41,21 @@ type ScopeFilter = {
 type ChatHistoryItem = {
   content?: string;
   isUser?: boolean;
+};
+
+type BotContext = {
+  tenantId: string | null;
+  userId: string | null;
+  role: "SUPER_ADMIN" | "USER";
+  source: "embedded" | "standalone";
+  allowGlobal: boolean;
+};
+
+type SessionWithBotUser = {
+  user?: {
+    id?: string;
+    role?: string;
+  };
 };
 
 type BotAction =
@@ -128,6 +152,13 @@ function friendlyError(msg: string): { message: string; errorType: string } {
       message:
         "AI model not found. Update the model name in Settings, for example gemini-1.5-flash.",
       errorType: "MODEL_NOT_FOUND",
+    };
+  }
+  if (msg === "MISSING_TENANT_CONTEXT") {
+    return {
+      message:
+        "I can’t access company data until a tenant/company context is selected.",
+      errorType: "MISSING_TENANT_CONTEXT",
     };
   }
   if (msg.includes("ECONNREFUSED")) {
@@ -288,6 +319,63 @@ function normalizeValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isExplicitGlobalQuestion(question: string): boolean {
+  return /\b(global|system[-\s]?wide|all tenants|all companies|across tenants|across companies)\b/i.test(
+    question,
+  );
+}
+
+function resolveConfiguredTenant(context: AppContextConfig): string {
+  return (
+    normalizeValue(context.dataScope?.tenantId) ||
+    normalizeValue(context.dataScope?.fixedTenantId) ||
+    normalizeValue(context.dataScope?.trustedTenantId)
+  );
+}
+
+function getSessionUser(session: unknown) {
+  const user = (session as SessionWithBotUser | null)?.user;
+  return {
+    id: normalizeValue(user?.id),
+    role: user?.role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "USER",
+  } as const;
+}
+
+function resolveBotContext(args: {
+  req: Request;
+  appUserId: string;
+  appContext: AppContextConfig;
+  question: string;
+  session: unknown;
+}): BotContext {
+  const sessionUser = getSessionUser(args.session);
+  const configuredTenantId = resolveConfiguredTenant(args.appContext);
+  const source: BotContext["source"] =
+    args.session && sessionUser.id === args.appUserId ? "standalone" : "embedded";
+  const role = sessionUser.role;
+  const allowGlobal =
+    role === "SUPER_ADMIN" && isExplicitGlobalQuestion(args.question);
+
+  return {
+    tenantId: configuredTenantId || null,
+    userId: sessionUser.id || null,
+    role,
+    source,
+    allowGlobal,
+  };
+}
+
+function tenantContextError() {
+  return Response.json(
+    {
+      error:
+        "I can’t access company data until a tenant/company context is selected.",
+      errorType: "MISSING_TENANT_CONTEXT",
+    },
+    { status: 403, headers: CORS },
+  );
+}
+
 function escapeSqlLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
@@ -302,6 +390,15 @@ function getSchemaColumns(schema: any): Set<string> {
     columns
       .map((column: any) => String(column?.column_name || "").toLowerCase())
       .filter(Boolean),
+  );
+}
+
+function hasTenantOwnedTables(schema: any, tenantColumn = "tenant_id"): boolean {
+  const columns = Array.isArray(schema?.tables) ? schema.tables : [];
+  return columns.some(
+    (column: any) =>
+      String(column?.column_name || "").toLowerCase() ===
+      tenantColumn.toLowerCase(),
   );
 }
 
@@ -556,6 +653,7 @@ function buildErpActions(
 }
 
 export async function POST(req: Request) {
+  const session = await auth();
   const apiKey =
     req.headers.get("x-api-key") || req.headers.get("X-API-Key") || "";
 
@@ -569,11 +667,6 @@ export async function POST(req: Request) {
   const body = await req.json();
   const question = normalizeValue(body?.question);
   const preferredLang = body?.preferredLang;
-  const tenantId =
-    normalizeValue(body?.tenant_id) ||
-    normalizeValue(req.headers.get("x-tenant-id"));
-  const userId =
-    normalizeValue(body?.userId) || normalizeValue(req.headers.get("x-user-id"));
   const userEmail =
     normalizeValue(body?.userEmail) ||
     normalizeValue(req.headers.get("x-user-email"));
@@ -595,6 +688,7 @@ export async function POST(req: Request) {
     where: { apiKey },
     select: {
       id: true,
+      userId: true,
       isActive: true,
       dbUrl: true,
       geminiKey: true,
@@ -640,6 +734,13 @@ export async function POST(req: Request) {
   } catch {}
 
   const appContext = parseAppContext(app.contextJson);
+  const botContext = resolveBotContext({
+    req,
+    appUserId: app.userId,
+    appContext,
+    question,
+    session,
+  });
   const widgetMode =
     widgetModeFromRequest === "erp" || appContext.widgetMode === "erp"
       ? "erp"
@@ -647,20 +748,30 @@ export async function POST(req: Request) {
   const scope = buildScopeFilters({
     schema,
     context: appContext,
-    tenantId,
-    userId,
+    tenantId: botContext.tenantId || "",
+    userId: botContext.userId || "",
   });
 
   if (
-    widgetMode === "erp" &&
     scope.mode !== "database" &&
+    !botContext.allowGlobal &&
+    !botContext.tenantId
+  ) {
+    if (hasTenantOwnedTables(schema, scope.tenantColumn || "tenant_id")) {
+      return tenantContextError();
+    }
+  }
+
+  if (
+    scope.mode !== "database" &&
+    !botContext.allowGlobal &&
     !scope.filters.length &&
-    (tenantId || userId || scope.tenantColumn || scope.userColumn)
+    (botContext.tenantId || botContext.userId || scope.tenantColumn || scope.userColumn)
   ) {
     return Response.json(
       {
         error:
-          "No valid tenant or user scope could be applied for this ERP widget. Configure Connected Apps scope settings or pass the ERP tenant/user id.",
+          "I can’t access company data until a tenant/company context is selected.",
         errorType: "MISSING_SCOPE",
       },
       { status: 400, headers: CORS },
@@ -699,7 +810,9 @@ export async function POST(req: Request) {
   }
 
   const scopeHint =
-    scope.filters.length > 0
+    botContext.allowGlobal
+      ? "IMPORTANT: This is an explicit superadmin global/system-wide query. Keep it read-only and avoid exposing secrets."
+      : scope.filters.length > 0
       ? `IMPORTANT: Apply these filters to every query: ${scope.filters
           .map((filter) => `${filter.column} = ${escapeSqlLiteral(filter.value)}`)
           .join(" AND ")}. Never return data outside this scope.`
@@ -719,7 +832,7 @@ export async function POST(req: Request) {
       "Exclude soft-deleted records when name is prefixed with [DELETED]. Use DISTINCT to avoid duplicates.",
   };
 
-  const prompt = `${promptPrefix}\n${scopeHint}\nUser ID: ${userId || "unknown"}\nUser Email: ${userEmail || "unknown"}\n\n${contextPrompt}`.trim();
+  const prompt = `${promptPrefix}\n${scopeHint}\nTenant ID: ${botContext.tenantId || "none"}\nUser ID: ${botContext.userId || "unknown"}\nUser Email: ${userEmail || "unknown"}\nBot source: ${botContext.source}\nRole: ${botContext.role}\n\n${contextPrompt}`.trim();
 
   let sql = "";
   try {
@@ -739,7 +852,14 @@ export async function POST(req: Request) {
     );
   }
 
-  if (scope.filters.length) {
+  if (scope.mode !== "database" && botContext.tenantId && !botContext.allowGlobal) {
+    sql = injectTenantScopeSQL({
+      sql,
+      schema,
+      tenantId: botContext.tenantId,
+      tenantColumn: scope.tenantColumn || "tenant_id",
+    });
+  } else if (scope.filters.length) {
     sql = injectScopeFilters(sql, scope.filters);
   }
 
@@ -750,11 +870,40 @@ export async function POST(req: Request) {
     );
   }
 
+  if (scope.mode !== "database") {
+    const tenantGuard = validateTenantScopedSQL({
+      sql,
+      schema,
+      tenantId: botContext.tenantId,
+      tenantColumn: scope.tenantColumn || "tenant_id",
+      allowGlobal: botContext.allowGlobal,
+    });
+    if (!tenantGuard.ok) {
+      console.warn("Tenant SQL rejected", {
+        appId: app.id,
+        tenantId: botContext.tenantId,
+        userId: botContext.userId,
+        source: botContext.source,
+        role: botContext.role,
+        tables: tenantGuard.tables,
+      });
+      return tenantContextError();
+    }
+  }
+
   const userPrisma = new PrismaClient({
     datasources: { db: { url: app.dbUrl } },
   });
 
   try {
+    console.info("Bot query executing", {
+      appId: app.id,
+      tenantId: botContext.tenantId,
+      userId: botContext.userId,
+      source: botContext.source,
+      role: botContext.role,
+      global: botContext.allowGlobal,
+    });
     const rawResult = (await userPrisma.$queryRawUnsafe(sql)) as any[];
     let result = serialize(rawResult);
     result = filterSmartResult(result);
@@ -832,12 +981,48 @@ export async function POST(req: Request) {
       );
 
       let fixedSql = cleanSQL(rawFixed);
-      if (scope.filters.length) {
+      if (scope.mode !== "database" && botContext.tenantId && !botContext.allowGlobal) {
+        fixedSql = injectTenantScopeSQL({
+          sql: fixedSql,
+          schema,
+          tenantId: botContext.tenantId,
+          tenantColumn: scope.tenantColumn || "tenant_id",
+        });
+      } else if (scope.filters.length) {
         fixedSql = injectScopeFilters(fixedSql, scope.filters);
       }
 
       if (!isSafeSQL(fixedSql)) throw new Error("Fixed SQL unsafe");
 
+      if (scope.mode !== "database") {
+        const fixedTenantGuard = validateTenantScopedSQL({
+          sql: fixedSql,
+          schema,
+          tenantId: botContext.tenantId,
+          tenantColumn: scope.tenantColumn || "tenant_id",
+          allowGlobal: botContext.allowGlobal,
+        });
+        if (!fixedTenantGuard.ok) {
+          console.warn("Fixed tenant SQL rejected", {
+            appId: app.id,
+            tenantId: botContext.tenantId,
+            userId: botContext.userId,
+            source: botContext.source,
+            role: botContext.role,
+            tables: fixedTenantGuard.tables,
+          });
+          throw new Error("MISSING_TENANT_CONTEXT");
+        }
+      }
+
+      console.info("Bot fixed query executing", {
+        appId: app.id,
+        tenantId: botContext.tenantId,
+        userId: botContext.userId,
+        source: botContext.source,
+        role: botContext.role,
+        global: botContext.allowGlobal,
+      });
       const rawResult = (await userPrisma.$queryRawUnsafe(fixedSql)) as any[];
       let result = serialize(rawResult);
       result = filterSmartResult(result);
