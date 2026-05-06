@@ -1,7 +1,7 @@
 "use client";
 // app/dashboard/widget-sites/page.tsx — AWK TLD BOT theme
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 interface App {
   id: string;
@@ -29,6 +29,10 @@ function parseContext(raw?: string | null) {
   }
 }
 
+function requiresTenantId(scopeMode: string) {
+  return ["tenant", "user", "hybrid"].includes(scopeMode);
+}
+
 export default function WidgetSitesPage() {
   const [apps, setApps] = useState<App[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,22 +52,24 @@ export default function WidgetSitesPage() {
   const [showForm, setShowForm] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [rebuildingId, setRebuildingId] = useState<string | null>(null);
+  const [editingAppId, setEditingAppId] = useState<string | null>(null);
   const [newApp, setNewApp] = useState<{ apiKey: string; snippet: string; name: string } | null>(null);
 
-  useEffect(() => { fetchApps(); }, []);
-
-  async function fetchApps() {
+  const fetchApps = useCallback(async () => {
     setLoading(true);
     const res = await fetch("/api/widget/register");
     const data = await res.json();
     setApps(Array.isArray(data) ? data : []);
     setLoading(false);
-  }
+  }, []);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { fetchApps(); }, [fetchApps]);
 
   async function createApp() {
     if (!form.name || !form.dbUrl) return;
-    if (form.scopeMode !== "database" && !form.tenantId.trim()) {
-      alert("Tenant ID is required for shared multi-tenant databases.");
+    if (requiresTenantId(form.scopeMode) && !form.tenantId.trim()) {
+      alert("Tenant ID is required when you choose tenant/user/hybrid scope.");
       return;
     }
     setCreating(true);
@@ -107,6 +113,86 @@ export default function WidgetSitesPage() {
     fetchApps();
   }
 
+  function resetForm() {
+    setForm({
+      name: "",
+      origin: "",
+      dbUrl: "",
+      dbType: "POSTGRESQL",
+      geminiKey: "",
+      widgetMode: "erp",
+      scopeMode: "auto",
+      tenantId: "",
+      tenantColumn: "tenant_id",
+      userColumn: "user_id",
+    });
+    setEditingAppId(null);
+  }
+
+  function startEdit(app: App) {
+    const context = parseContext(app.contextJson);
+    setForm({
+      name: app.name,
+      origin: app.origin || "",
+      dbUrl: "",
+      dbType: app.dbType || "POSTGRESQL",
+      geminiKey: "",
+      widgetMode: context?.widgetMode || "erp",
+      scopeMode: context?.dataScope?.mode || "auto",
+      tenantId: context?.dataScope?.tenantId || "",
+      tenantColumn: context?.dataScope?.tenantColumn || "tenant_id",
+      userColumn: context?.dataScope?.userColumn || "user_id",
+    });
+    setEditingAppId(app.id);
+    setShowForm(true);
+    setNewApp(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function updateApp() {
+    if (!editingAppId || !form.name) return;
+    if (requiresTenantId(form.scopeMode) && !form.tenantId.trim()) {
+      alert("Tenant ID is required when you choose tenant/user/hybrid scope.");
+      return;
+    }
+
+    setCreating(true);
+    const contextJson = {
+      widgetMode: form.widgetMode,
+      dataScope: {
+        mode: form.scopeMode,
+        tenantId: form.tenantId || undefined,
+        tenantColumn: form.tenantColumn || undefined,
+        userColumn: form.userColumn || undefined,
+      },
+    };
+
+    const res = await fetch("/api/widget/register", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: editingAppId,
+        name: form.name,
+        origin: form.origin,
+        ...(form.dbUrl.trim() ? { dbUrl: form.dbUrl.trim() } : {}),
+        dbType: form.dbType,
+        ...(form.geminiKey.trim() ? { geminiKey: form.geminiKey.trim() } : {}),
+        contextJson,
+      }),
+    });
+    const data = await res.json();
+    setCreating(false);
+
+    if (!res.ok) {
+      alert("Update failed: " + (data.error || "Unknown error"));
+      return;
+    }
+
+    setShowForm(false);
+    resetForm();
+    fetchApps();
+  }
+
   async function deleteApp(id: string) {
     if (!confirm("Delete this app? All chat history will be lost.")) return;
     await fetch("/api/widget/register", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
@@ -135,12 +221,19 @@ export default function WidgetSitesPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest mb-2">// Connected Apps</div>
+          <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest mb-2">{"// Connected Apps"}</div>
           <h1 className="fd text-4xl tracking-wide text-white">YOUR APPS</h1>
           <p className="text-[#5a5a5a] text-sm mt-1">Register your ERPs and apps to embed the AI chat widget.</p>
         </div>
         <button
-          onClick={() => setShowForm(!showForm)}
+          onClick={() => {
+            if (showForm && !editingAppId) {
+              setShowForm(false);
+              return;
+            }
+            resetForm();
+            setShowForm(true);
+          }}
           className="fd text-lg tracking-wide px-6 py-2.5 text-black transition hover:-translate-y-0.5"
           style={{ background: "#e8ff47" }}
         >
@@ -150,11 +243,11 @@ export default function WidgetSitesPage() {
 
       {/* How it works */}
       <div className="border border-[#e8ff47]/20 bg-[#e8ff47]/5 p-4">
-        <p className="fm text-xs text-[#e8ff47] uppercase tracking-wider mb-2">// How to connect your ERP</p>
+        <p className="fm text-xs text-[#e8ff47] uppercase tracking-wider mb-2">{"// How to connect your ERP"}</p>
         <ol className="space-y-1 text-sm text-[#5a5a5a] list-none">
           <li><span className="text-[#e8ff47] mr-2">01</span>Click <strong className="text-white">+ New App</strong> and fill in your app name, database URL, and Gemini key</li>
           <li><span className="text-[#e8ff47] mr-2">02</span>Click <strong className="text-white">Create</strong> — copy the <strong className="text-white">API Key</strong> and <strong className="text-white">Embed Snippet</strong></li>
-          <li><span className="text-[#e8ff47] mr-2">03</span>Paste the snippet before <code className="text-[#e8ff47]">&lt;/body&gt;</code> in your ERP's HTML</li>
+          <li><span className="text-[#e8ff47] mr-2">03</span>Paste the snippet before <code className="text-[#e8ff47]">&lt;/body&gt;</code> in your ERP&apos;s HTML</li>
           <li><span className="text-[#e8ff47] mr-2">04</span>Click <strong className="text-white">Rebuild Schema</strong> so the AI learns your database structure</li>
           <li><span className="text-[#e8ff47] mr-2">05</span>A chat button appears in your ERP — users can now ask questions in Urdu or English!</li>
         </ol>
@@ -188,11 +281,13 @@ export default function WidgetSitesPage() {
         </div>
       )}
 
-      {/* Create form */}
+      {/* Create/edit form */}
       {showForm && (
         <div className="border border-[#1e1e1e] bg-[#0d0d0d]">
           <div className="px-5 py-4 border-b border-[#1e1e1e]">
-            <p className="fd text-xl tracking-wide text-white">REGISTER NEW APP</p>
+            <p className="fd text-xl tracking-wide text-white">
+              {editingAppId ? "EDIT APP" : "REGISTER NEW APP"}
+            </p>
           </div>
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-2 gap-4">
@@ -203,17 +298,19 @@ export default function WidgetSitesPage() {
                   className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors" />
               </div>
               <div className="col-span-2">
-                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Database URL *</label>
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Database URL {editingAppId ? "(paste new URL to replace)" : "*"}</label>
                 <input value={form.dbUrl} onChange={e => setForm(f => ({ ...f, dbUrl: e.target.value }))}
-                  placeholder="postgresql://user:pass@host/dbname?sslmode=require"
+                  placeholder={editingAppId ? "Leave blank to keep current DB URL" : "postgresql://user:pass@host/dbname?sslmode=require"}
                   className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors font-mono"
                   dir="ltr" />
-                <p className="fm text-[10px] text-[#3a3a3a] mt-1">// NeonDB / Supabase / Railway connection string</p>
+                <p className="fm text-[10px] text-[#3a3a3a] mt-1">
+                  {editingAppId ? "// For security the saved URL is hidden. Paste the corrected URL here, then update." : "// NeonDB / Supabase / Railway connection string"}
+                </p>
               </div>
               <div className="col-span-2">
                 <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Gemini API Key</label>
                 <input type="password" value={form.geminiKey} onChange={e => setForm(f => ({ ...f, geminiKey: e.target.value }))}
-                  placeholder="AIzaSy... (get free from aistudio.google.com)"
+                  placeholder={editingAppId ? "Leave blank to keep current Gemini key" : "AIzaSy... (get free from aistudio.google.com)"}
                   className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors" dir="ltr" />
               </div>
               <div>
@@ -250,11 +347,15 @@ export default function WidgetSitesPage() {
                 </select>
               </div>
               <div className="col-span-2">
-                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Tenant ID *</label>
+                <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">
+                  Tenant ID {requiresTenantId(form.scopeMode) ? "*" : "(optional)"}
+                </label>
                 <input value={form.tenantId} onChange={e => setForm(f => ({ ...f, tenantId: e.target.value }))}
                   placeholder="e.g. tenants.id for this company"
                   className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors font-mono" />
-                <p className="fm text-[10px] text-[#3a3a3a] mt-1">// Required for shared multi-tenant databases. Leave empty only when scope is one database per customer.</p>
+                <p className="fm text-[10px] text-[#3a3a3a] mt-1">
+                  {"// Required only for shared tenant databases. For isolated databases, choose \"One database per customer\" or keep Auto detect."}
+                </p>
               </div>
               <div>
                 <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Tenant Column</label>
@@ -270,12 +371,14 @@ export default function WidgetSitesPage() {
               </div>
             </div>
             <div className="flex gap-3 pt-2">
-              <button onClick={createApp} disabled={creating || !form.name || !form.dbUrl || (form.scopeMode !== "database" && !form.tenantId.trim())}
+              <button
+                onClick={editingAppId ? updateApp : createApp}
+                disabled={creating || !form.name || (!editingAppId && !form.dbUrl) || (requiresTenantId(form.scopeMode) && !form.tenantId.trim())}
                 className="fd text-lg tracking-wide px-8 py-2.5 text-black disabled:opacity-50 transition hover:-translate-y-0.5"
                 style={{ background: "#e8ff47" }}>
-                {creating ? "CREATING..." : "CREATE APP"}
+                {creating ? (editingAppId ? "UPDATING..." : "CREATING...") : editingAppId ? "UPDATE APP" : "CREATE APP"}
               </button>
-              <button onClick={() => setShowForm(false)} className="fm text-xs border border-[#1e1e1e] text-[#5a5a5a] px-6 hover:border-[#e8ff47] hover:text-white transition-colors">
+              <button onClick={() => { setShowForm(false); resetForm(); }} className="fm text-xs border border-[#1e1e1e] text-[#5a5a5a] px-6 hover:border-[#e8ff47] hover:text-white transition-colors">
                 Cancel
               </button>
             </div>
@@ -285,11 +388,11 @@ export default function WidgetSitesPage() {
 
       {/* Apps list */}
       {loading ? (
-        <div className="text-center py-12 fm text-xs text-[#3a3a3a]">// Loading...</div>
+        <div className="text-center py-12 fm text-xs text-[#3a3a3a]">{"// Loading..."}</div>
       ) : apps.length === 0 ? (
         <div className="border border-dashed border-[#1e1e1e] py-16 text-center">
           <p className="fd text-3xl text-[#1e1e1e] mb-2">NO APPS YET</p>
-          <p className="fm text-xs text-[#3a3a3a]">// Click + New App to register your first ERP</p>
+          <p className="fm text-xs text-[#3a3a3a]">{"// Click + New App to register your first ERP"}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -320,6 +423,10 @@ export default function WidgetSitesPage() {
                   </div>
                 </div>
                 <div className="flex flex-col gap-2 shrink-0">
+                  <button onClick={() => startEdit(app)}
+                    className="fm text-[10px] border border-[#1e1e1e] text-[#5a5a5a] px-3 py-1.5 hover:border-[#e8ff47] hover:text-[#e8ff47] transition-colors">
+                    Edit
+                  </button>
                   <button onClick={() => copy(app.apiKey, app.id + "k")}
                     className="fm text-[10px] border border-[#1e1e1e] text-[#5a5a5a] px-3 py-1.5 hover:border-[#e8ff47] hover:text-[#e8ff47] transition-colors">
                     {copied === app.id + "k" ? "✓ Copied" : "Copy Key"}
@@ -337,7 +444,7 @@ export default function WidgetSitesPage() {
 
               {/* Embed snippet */}
               <div className="mx-5 mb-5 bg-black border border-[#1e1e1e] p-3 relative">
-                <p className="fm text-[10px] text-[#3a3a3a] mb-1.5">// Embed in your app before &lt;/body&gt;:</p>
+                <p className="fm text-[10px] text-[#3a3a3a] mb-1.5">{"// Embed in your app before </body>:"}</p>
                 <code className="fm text-xs text-[#e8ff47] break-all">
                   {`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="${widgetMode}" data-tenant-id="ERP_TENANT_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`}
                 </code>

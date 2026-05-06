@@ -17,12 +17,12 @@ const AI_PROVIDERS = [
     value: "GEMINI", 
     label: "Google Gemini", 
     needsKey: true, 
-    defaultModel: "gemini-3-flash-preview",
+    defaultModel: "gemini-2.5-flash",
     defaultUrl: "https://generativelanguage.googleapis.com/v1beta",
     models: [
-      "gemini-3-flash-preview",
-      "gemini-2.0-flash-exp",
-      "gemini-1.0-pro"
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+      "gemini-2.0-flash"
     ]
   },
   { value: "OPENAI", label: "OpenAI (ChatGPT)", needsKey: true, defaultModel: "gpt-3.5-turbo", defaultUrl: "https://api.openai.com/v1" },
@@ -34,7 +34,7 @@ const AI_PROVIDERS = [
 // Helper component for section titles
 const Section = ({ title }: { title: string }) => (
   <div className="flex items-center gap-3">
-    <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest">//</div>
+    <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest">{"//"}</div>
     <h2 className="fd text-2xl tracking-wide text-white">{title}</h2>
   </div>
 );
@@ -111,6 +111,7 @@ export default function SettingsPage() {
       if (!aiModel) setAiModel(selectedProvider.defaultModel);
       if (!aiBaseUrl) setAiBaseUrl(selectedProvider.defaultUrl);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiProvider, selectedProvider]);
 
   // ----- Save app settings (AI + DB) -----
@@ -183,7 +184,7 @@ export default function SettingsPage() {
       } else {
         setPwMsg({ text: data.error || (isUr ? "ناکام" : "Failed"), ok: false });
       }
-    } catch (err) {
+    } catch {
       setPwMsg({ text: isUr ? "سرور کی خرابی" : "Server error", ok: false });
     }
     setPwSaving(false);
@@ -199,13 +200,13 @@ export default function SettingsPage() {
       `}</style>
 
       <div>
-        <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest mb-2">// Settings</div>
+        <div className="fm text-xs text-[#e8ff47] uppercase tracking-widest mb-2">{"// Settings"}</div>
         <h1 className="fd text-4xl tracking-wide text-white">APP SETTINGS</h1>
         <p className="text-[#5a5a5a] text-sm mt-1">Configure your database connection and AI provider for each connected app.</p>
       </div>
 
       <div className="border border-[#e8ff47]/20 bg-[#e8ff47]/5 p-4 rounded-none">
-        <p className="fm text-xs text-[#e8ff47] uppercase tracking-wider mb-2">// Supported AI Providers</p>
+        <p className="fm text-xs text-[#e8ff47] uppercase tracking-wider mb-2">{"// Supported AI Providers"}</p>
         <div className="grid grid-cols-2 gap-2 text-sm text-[#5a5a5a]">
           <div>✓ Google Gemini (Free tier available)</div>
           <div>✓ OpenAI ChatGPT (GPT-3.5/4)</div>
@@ -350,7 +351,7 @@ export default function SettingsPage() {
 
       {/* Local Setup Instructions + Language Preference */}
       <div className="border-t border-[#1e1e1e] pt-6">
-        <p className="fm text-xs text-[#3a3a3a] uppercase tracking-wider mb-3">// Local AI Setup (LM Studio / Ollama)</p>
+        <p className="fm text-xs text-[#3a3a3a] uppercase tracking-wider mb-3">{"// Local AI Setup (LM Studio / Ollama)"}</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="border border-[#1e1e1e] p-4">
             <p className="fd text-lg text-[#e8ff47] mb-2">LM Studio</p>
@@ -467,13 +468,15 @@ export default function SettingsPage() {
         </div>
 
         <p className="fm text-[10px] text-[#3a3a3a]">
-          // Each row: {"{ prompt, completion, explanation, lang, feedback }"}
+          {"// Each row: { prompt, completion, explanation, lang, feedback }"}
         </p>
       </div>
 
       {/* After saving tips */}
       <div className="border-t border-[#1e1e1e] pt-6">
-        <p className="fm text-xs text-[#3a3a3a] uppercase tracking-wider mb-3">// {isUr ? "محفوظ کرنے کے بعد" : "After saving"}</p>
+        <p className="fm text-xs text-[#3a3a3a] uppercase tracking-wider mb-3">
+          {"// "}{isUr ? "محفوظ کرنے کے بعد" : "After saving"}
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
             { num: "01", titleEn: "Rebuild Schema", titleUr: "اسکیما بنائیں",  descEn: "Connected Apps → Rebuild Schema", descUr: "Connected Apps → Rebuild Schema", href: "/dashboard/widget-sites" },

@@ -3,6 +3,36 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import Charts from "@/app/components/charts/Charts";
 import ChatHistory, { ChatLog } from "@/app/components/chat/ChatHistory";
 
+type QueryRow = Record<string, unknown>;
+
+type SpeechResultEvent = {
+  results: {
+    [index: number]: {
+      [index: number]: {
+        transcript: string;
+      };
+    };
+  };
+};
+
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: SpeechResultEvent) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+type SpeechWindow = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
+};
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Message {
   id: string;
@@ -10,7 +40,7 @@ interface Message {
   isUser: boolean;
   timestamp: Date;
   sql?: string;
-  result?: any[];
+  result?: QueryRow[];
   visualization?: string;
   insights?: string[];
   isError?: boolean;
@@ -31,7 +61,7 @@ function ErrorToast({ message, errorType, onClose }: {
       <div className="flex items-start gap-2">
         <span className="text-red-400 shrink-0 text-sm">✕</span>
         <div className="flex-1 min-w-0">
-          <p className="text-[9px] text-red-400 uppercase tracking-wider mb-1">// Error</p>
+          <p className="text-[9px] text-red-400 uppercase tracking-wider mb-1">{"// Error"}</p>
           <p className="text-white leading-relaxed mb-2 wrap-break-word text-[11px]">{message}</p>
           {["QUOTA_EXCEEDED","NO_KEY","INVALID_KEY","MODEL_NOT_FOUND"].includes(errorType || "") && (
             <a href="/dashboard/settings" className="text-[10px] underline" style={{ color: "#e8ff47" }}>
@@ -85,12 +115,13 @@ function MicOverlay({ onStop, isUr }: { onStop: () => void; isUr: boolean }) {
 // ── Voice hook ────────────────────────────────────────────────────────────────
 function useVoice() {
   function listen(onResult: (t: string) => void, onEnd: () => void, lang = "auto") {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const speechWindow = window as SpeechWindow;
+    const SR = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
     if (!SR) { alert("Voice requires Chrome or Edge."); onEnd(); return () => {}; }
     const r = new SR();
     r.lang = lang === "ur" ? "ur-PK" : lang === "en" ? "en-US" : "ur-PK";
     r.interimResults = false; r.continuous = false;
-    r.onresult = (e: any) => onResult(e.results[0][0].transcript);
+    r.onresult = (e) => onResult(e.results[0][0].transcript);
     r.onerror = () => onEnd(); r.onend = () => onEnd();
     r.start();
     return () => { try { r.stop(); } catch {} };
@@ -225,11 +256,16 @@ export default function DashboardPage() {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        setToast({ message: data.error, errorType: data.errorType });
+        const errorMessage =
+          data.error ||
+          data.explanation ||
+          "The bot could not answer this question.";
+        setToast({ message: errorMessage, errorType: data.errorType });
         setMessages(m => [...m, {
-          id:(Date.now()+1).toString(), content:data.explanation,
+          id:(Date.now()+1).toString(), content:errorMessage,
           isUser:false, timestamp:new Date(), isError:true,
           detectedLang:data.detectedLang,
+          errorType:data.errorType,
         }]);
       } else {
         setMessages(m => [...m, {
@@ -293,7 +329,7 @@ export default function DashboardPage() {
           <aside className="relative z-10 w-80 max-w-[88vw] lg:w-80 xl:w-[22rem] h-full border-r border-[#1e1e1e] bg-[#080808] flex flex-col shrink-0">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e1e]">
               <p className="fm text-[10px] text-[#e8ff47] uppercase tracking-wider">
-                // {isUr ? "پرانی گفتگو" : "Chat History"}
+                {"// "}{isUr ? "پرانی گفتگو" : "Chat History"}
               </p>
               <button onClick={() => setShowHistory(false)} className="text-[#3a3a3a] hover:text-white text-xs">✕</button>
             </div>
@@ -385,7 +421,6 @@ export default function DashboardPage() {
           )}
 
           {messages.map(msg => {
-            const msgIsUr = msg.detectedLang === "ur" || isUr;
             const isChartable = msg.result && msg.visualization && !["kpi","table","none"].includes(msg.visualization);
             const hasResult   = msg.result && msg.result.length > 0;
 

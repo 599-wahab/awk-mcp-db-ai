@@ -6,7 +6,9 @@ import {
   validateTenantScopedSQL,
 } from "@/lib/sql-guard";
 import { AIProviderFactory } from "@/lib/ai/factory";
+import type { AIProviderType } from "@/lib/ai/types";
 import { getAppSchema } from "@/lib/memory/schema-loader";
+import type { DatabaseSchema } from "@/lib/memory/schema-loader";
 import { PrismaClient } from "@prisma/client";
 import { auth } from "@/lib/auth";
 
@@ -57,6 +59,15 @@ type SessionWithBotUser = {
     role?: string;
   };
 };
+
+type SchemaColumn = {
+  table_name: string;
+  column_name: string;
+  data_type: string;
+  is_nullable?: string;
+};
+
+type QueryRow = Record<string, unknown>;
 
 type BotAction =
   | { type: "navigate"; href: string; label?: string }
@@ -150,7 +161,7 @@ function friendlyError(msg: string): { message: string; errorType: string } {
   if (msg === "MODEL_NOT_FOUND") {
     return {
       message:
-        "AI model not found. Update the model name in Settings, for example gemini-1.5-flash.",
+        "AI model not found. Update the model name in Settings, for example gemini-2.5-flash, or leave the model field blank.",
       errorType: "MODEL_NOT_FOUND",
     };
   }
@@ -159,6 +170,13 @@ function friendlyError(msg: string): { message: string; errorType: string } {
       message:
         "I can’t access company data until a tenant/company context is selected.",
       errorType: "MISSING_TENANT_CONTEXT",
+    };
+  }
+  if (msg === "AI_OVERLOADED") {
+    return {
+      message:
+        "Gemini is busy right now. Please try again, or switch this app to another AI provider/model in Settings.",
+      errorType: "AI_OVERLOADED",
     };
   }
   if (msg.includes("ECONNREFUSED")) {
@@ -174,7 +192,7 @@ function friendlyError(msg: string): { message: string; errorType: string } {
   };
 }
 
-function serialize(result: any[]) {
+function serialize(result: QueryRow[]): QueryRow[] {
   return result.map((row) => {
     const obj: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(row)) {
@@ -186,7 +204,7 @@ function serialize(result: any[]) {
   });
 }
 
-function filterSmartResult(result: any[]): any[] {
+function filterSmartResult(result: QueryRow[]): QueryRow[] {
   if (!result?.length) return result;
 
   const keys = Object.keys(result[0]);
@@ -207,11 +225,12 @@ function filterSmartResult(result: any[]): any[] {
       key.toLowerCase().includes("price") || key.toLowerCase().includes("amount"),
     );
     if (priceKey) {
-      const seen = new Map<string, any>();
+      const seen = new Map<string, QueryRow>();
       filtered.forEach((row) => {
         const name = String(row[nameKey]).toLowerCase().trim();
         const price = Number(row[priceKey]) || 0;
-        if (!seen.has(name) || price > Number(seen.get(name)[priceKey])) {
+        const existing = seen.get(name);
+        if (!existing || price > Number(existing[priceKey])) {
           seen.set(name, row);
         }
       });
@@ -250,7 +269,7 @@ function needsClarification(
   return null;
 }
 
-function detectViz(result: any[], question: string): string {
+function detectViz(result: QueryRow[], question: string): string {
   if (!result?.length) return "none";
 
   const q = question.toLowerCase();
@@ -272,25 +291,27 @@ function detectViz(result: any[], question: string): string {
   return "table";
 }
 
-function pivotStacked(result: any[]) {
+function pivotStacked(result: QueryRow[]): QueryRow[] {
   if (!result.length || !("category" in result[0])) return result;
 
   const map: Record<string, Record<string, unknown>> = {};
   result.forEach((row) => {
-    if (!map[row.month]) {
-      map[row.month] = {
-        month: new Date(row.month).toLocaleString("default", {
+    const monthKey = String(row.month);
+    const categoryKey = String(row.category);
+    if (!map[monthKey]) {
+      map[monthKey] = {
+        month: new Date(monthKey).toLocaleString("default", {
           month: "short",
           year: "numeric",
         }),
       };
     }
-    map[row.month][row.category] = Number(row.total_amount);
+    map[monthKey][categoryKey] = Number(row.total_amount);
   });
   return Object.values(map);
 }
 
-function getInsights(result: any[]) {
+function getInsights(result: QueryRow[]) {
   if (!result?.length || result.length < 2) return [];
 
   const keys = Object.keys(result[0]);
@@ -298,11 +319,100 @@ function getInsights(result: any[]) {
   const labelKey = keys.find((key) => typeof result[0][key] !== "number");
   if (!numKey || !labelKey) return [];
 
-  const sorted = [...result].sort((a, b) => b[numKey] - a[numKey]);
+  const sorted = [...result].sort((a, b) => Number(b[numKey]) - Number(a[numKey]));
   return [
     `${sorted[0][labelKey]} has the highest value (${Number(sorted[0][numKey]).toLocaleString()}).`,
     `${sorted[sorted.length - 1][labelKey]} has the lowest value (${Number(sorted[sorted.length - 1][numKey]).toLocaleString()}).`,
   ];
+}
+
+function getQuestionSubject(question: string): string {
+  const q = question.toLowerCase();
+  const subjects = [
+    "staff",
+    "customer",
+    "customers",
+    "product",
+    "products",
+    "supplier",
+    "suppliers",
+    "invoice",
+    "invoices",
+    "room",
+    "rooms",
+    "booking",
+    "bookings",
+    "task",
+    "tasks",
+    "sale",
+    "sales",
+    "income",
+    "revenue",
+  ];
+  return subjects.find((subject) => q.includes(subject)) || "record";
+}
+
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return "0";
+  if (typeof value === "number") return value.toLocaleString();
+  if (typeof value === "bigint") return Number(value).toLocaleString();
+  return String(value);
+}
+
+function buildLocalExplanation(args: {
+  question: string;
+  result: Array<Record<string, unknown>>;
+  detectedLang: "ur" | "en";
+}): string {
+  const { question, result, detectedLang } = args;
+  const subject = getQuestionSubject(question);
+  const isUr = detectedLang === "ur";
+
+  if (!result.length) {
+    return isUr
+      ? "اس سوال کے لئے کوئی ریکارڈ نہیں ملا۔"
+      : `No ${subject} records matched your question.`;
+  }
+
+  const first = result[0];
+  const entries = Object.entries(first);
+
+  if (result.length === 1 && entries.length === 1) {
+    const [key, value] = entries[0];
+    const formatted = formatValue(value);
+    const loweredKey = key.toLowerCase();
+
+    if (value === null) {
+      return isUr
+        ? "اس مدت کے لئے کوئی رقم موجود نہیں ملی۔"
+        : `No ${subject} amount was found for that period.`;
+    }
+
+    if (/count|total|sum|revenue|income|amount/i.test(loweredKey)) {
+      return isUr
+        ? `نتیجہ ${formatted} ہے۔`
+        : subject === "income" || subject === "revenue" || subject === "sales"
+          ? `The ${subject} total is ${formatted}.`
+          : `You have ${formatted} ${subject}${formatted === "1" ? "" : "s"}.`;
+    }
+  }
+
+  const nameKey = Object.keys(first).find((key) =>
+    /(^name$|full_name|customer_name|company_name|product_name|title)/i.test(key),
+  );
+  if (nameKey && result.length === 1) {
+    return isUr
+      ? `ایک متعلقہ ریکارڈ ملا: ${String(first[nameKey])}۔`
+      : `I found one matching ${subject}: ${String(first[nameKey])}.`;
+  }
+
+  return isUr
+    ? `${result.length} متعلقہ ریکارڈ ملے۔`
+    : `Found ${result.length} matching ${subject} record${result.length === 1 ? "" : "s"}.`;
+}
+
+function shouldUseAiExplanation() {
+  return process.env.ENABLE_AI_EXPLANATIONS === "true";
 }
 
 function parseAppContext(raw: string | null | undefined): AppContextConfig {
@@ -384,26 +494,87 @@ function isLikelySafeScopeValue(value: string): boolean {
   return !!value && value.length <= 160 && !/[\r\n;\0]/.test(value);
 }
 
-function getSchemaColumns(schema: any): Set<string> {
-  const columns = Array.isArray(schema?.tables) ? schema.tables : [];
+function getSchemaColumns(schema: DatabaseSchema): Set<string> {
+  const columns = Array.isArray(schema.tables) ? schema.tables : [];
   return new Set(
     columns
-      .map((column: any) => String(column?.column_name || "").toLowerCase())
+      .map((column) => String(column?.column_name || "").toLowerCase())
       .filter(Boolean),
   );
 }
 
-function hasTenantOwnedTables(schema: any, tenantColumn = "tenant_id"): boolean {
-  const columns = Array.isArray(schema?.tables) ? schema.tables : [];
+function hasTenantOwnedTables(schema: DatabaseSchema, tenantColumn = "tenant_id"): boolean {
+  const columns = Array.isArray(schema.tables) ? schema.tables : [];
   return columns.some(
-    (column: any) =>
+    (column) =>
       String(column?.column_name || "").toLowerCase() ===
       tenantColumn.toLowerCase(),
   );
 }
 
+function buildSchemaGuide(schema: DatabaseSchema, tenantColumn = "tenant_id") {
+  const grouped = new Map<string, SchemaColumn[]>();
+  for (const column of schema.tables || []) {
+    const columns = grouped.get(column.table_name) || [];
+    columns.push(column);
+    grouped.set(column.table_name, columns);
+  }
+
+  const tableLines = [...grouped.entries()]
+    .map(([tableName, columns]) => {
+      const columnText = columns
+        .map((column) => `${column.column_name}:${column.data_type}`)
+        .join(", ");
+      return `- ${tableName}(${columnText})`;
+    })
+    .join("\n");
+
+  const tenantTables = [...grouped.entries()]
+    .filter(([, columns]) =>
+      columns.some(
+        (column) => column.column_name.toLowerCase() === tenantColumn.toLowerCase(),
+      ),
+    )
+    .map(([tableName]) => tableName);
+
+  const nameColumns = [...grouped.entries()]
+    .map(([tableName, columns]) => {
+      const matches = columns
+        .filter((column) =>
+          /(^name$|full_name|customer_name|company_name|first_name|last_name|email|phone|title|code)/i.test(
+            column.column_name,
+          ),
+        )
+        .map((column) => column.column_name);
+      return matches.length ? `${tableName}: ${matches.join(", ")}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  const moneyColumns = [...grouped.entries()]
+    .map(([tableName, columns]) => {
+      const matches = columns
+        .filter((column) =>
+          /(amount|total|income|revenue|price|paid|payment|subtotal|balance|cost)/i.test(
+            column.column_name,
+          ),
+        )
+        .map((column) => column.column_name);
+      return matches.length ? `${tableName}: ${matches.join(", ")}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    tableLines,
+    tenantTables,
+    nameColumns,
+    moneyColumns,
+  };
+}
+
 function findMatchingColumn(
-  schema: object,
+  schema: DatabaseSchema,
   configuredColumn: string | undefined,
   candidates: string[],
 ): string | null {
@@ -417,7 +588,7 @@ function findMatchingColumn(
 }
 
 function buildScopeFilters(args: {
-  schema: object;
+  schema: DatabaseSchema;
   context: AppContextConfig;
   tenantId: string;
   userId: string;
@@ -494,9 +665,9 @@ function injectScopeFilters(sql: string, filters: ScopeFilter[]): string {
 }
 
 function getFieldValue(
-  row: Record<string, any>,
+  row: QueryRow,
   candidates: readonly string[],
-): any {
+): unknown {
   const entries = Object.entries(row);
   for (const candidate of candidates) {
     const found = entries.find(
@@ -512,7 +683,7 @@ function getFieldValue(
 }
 
 function pickSummaryFields(
-  row: Record<string, any>,
+  row: QueryRow,
   candidates: readonly string[],
 ): Record<string, unknown> {
   const summary: Record<string, unknown> = {};
@@ -525,7 +696,7 @@ function pickSummaryFields(
 
 function buildErpActions(
   question: string,
-  result: any[],
+  result: QueryRow[],
   routeMap: Record<string, string>,
 ): BotAction[] {
   const q = question.toLowerCase();
@@ -626,7 +797,7 @@ function buildErpActions(
     return actions;
   }
 
-  const row = result[0] as Record<string, any>;
+  const row = result[0];
   const recordId = getFieldValue(row, config.idFields);
   const label = getFieldValue(row, config.labelFields);
   const href = routeMap[config.routeKey];
@@ -725,13 +896,23 @@ export async function POST(req: Request) {
   const aiBaseUrl = app.aiBaseUrl || undefined;
   const aiModel = app.aiModel || undefined;
   const provider = AIProviderFactory.createProvider({
-    type: providerType as any,
+    type: providerType as AIProviderType,
   });
 
-  let schema: object = {};
+  let schema: DatabaseSchema;
   try {
     schema = await getAppSchema(app.id);
-  } catch {}
+  } catch (error) {
+    return Response.json(
+      {
+        error:
+          "I can’t read this app’s database schema yet. Fix the database URL, then click Rebuild Schema.",
+        errorType: "SCHEMA_UNAVAILABLE",
+        detail: error instanceof Error ? error.message : "Schema load failed",
+      },
+      { status: 400, headers: CORS },
+    );
+  }
 
   const appContext = parseAppContext(app.contextJson);
   const botContext = resolveBotContext({
@@ -825,11 +1006,16 @@ export async function POST(req: Request) {
       ? "[ERP widget mode: only support safe read-only ERP help. Prefer locating the requested invoice, product, customer, staff member, team, or task. Do not behave like a general database assistant.]"
       : "";
 
+  const schemaGuide = buildSchemaGuide(schema, scope.tenantColumn || "tenant_id");
   const schemaWithHint = {
     ...schema,
+    _tables: schemaGuide.tableLines,
+    _tenantOwnedTables: schemaGuide.tenantTables,
+    _nameSearchColumns: schemaGuide.nameColumns,
+    _moneyAndRevenueColumns: schemaGuide.moneyColumns,
     _hint:
       `${scopeHint} ` +
-      "Exclude soft-deleted records when name is prefixed with [DELETED]. Use DISTINCT to avoid duplicates.",
+      "Use the _tables list as the source of truth. For 'who is X' or name searches, search only real name/email/phone/code/title columns from _nameSearchColumns with ILIKE. For income/revenue/sales questions, prefer real amount/total/payment columns from _moneyAndRevenueColumns. Exclude soft-deleted records when name is prefixed with [DELETED]. Use DISTINCT to avoid duplicates. Never return SELECT 'UNABLE_TO_QUERY' if a reasonable query can be made from the schema.",
   };
 
   const prompt = `${promptPrefix}\n${scopeHint}\nTenant ID: ${botContext.tenantId || "none"}\nUser ID: ${botContext.userId || "unknown"}\nUser Email: ${userEmail || "unknown"}\nBot source: ${botContext.source}\nRole: ${botContext.role}\n\n${contextPrompt}`.trim();
@@ -844,11 +1030,46 @@ export async function POST(req: Request) {
       aiModel,
     );
     sql = cleanSQL(raw);
-  } catch (err: any) {
-    const fe = friendlyError(err.message);
+  } catch (err: unknown) {
+    const fe = friendlyError(err instanceof Error ? err.message : String(err));
     return Response.json(
       { error: fe.message, errorType: fe.errorType },
       { status: 500, headers: CORS },
+    );
+  }
+
+  if (/^SELECT\s+'UNABLE_TO_QUERY'\s+AS\s+error/i.test(sql)) {
+    const explanation =
+      detectedLang === "ur"
+        ? "میں اس سوال کے لئے موجودہ ڈیٹا بیس اسکیمہ سے محفوظ query نہیں بنا سکا۔ سوال میں table, date, product, customer, یا amount کی مزید تفصیل دیں۔"
+        : "I could not build a safe query for this question from the current app schema. Please add more detail like the table, date, product, customer, or amount you want.";
+
+    const log = await prisma.chatLog
+      .create({
+        data: {
+          appId: app.id,
+          question,
+          generatedSql: sql,
+          explanation,
+          wasSuccessful: false,
+          detectedLang,
+        },
+      })
+      .catch(() => null);
+
+    return Response.json(
+      {
+        explanation,
+        error: explanation,
+        errorType: "UNABLE_TO_QUERY",
+        sql,
+        result: [],
+        visualization: "none",
+        insights: [],
+        chatLogId: log?.id,
+        detectedLang,
+      },
+      { status: 422, headers: CORS },
     );
   }
 
@@ -904,28 +1125,31 @@ export async function POST(req: Request) {
       role: botContext.role,
       global: botContext.allowGlobal,
     });
-    const rawResult = (await userPrisma.$queryRawUnsafe(sql)) as any[];
+    const rawResult = (await userPrisma.$queryRawUnsafe(sql)) as QueryRow[];
     let result = serialize(rawResult);
     result = filterSmartResult(result);
     const visualization = detectViz(result, question);
     if (visualization === "stacked") result = pivotStacked(result);
 
-    let explanation =
-      detectedLang === "ur"
-        ? `${result.length} نتائج ملے۔`
-        : `Found ${result.length} result(s).`;
+    let explanation = buildLocalExplanation({
+      question,
+      result,
+      detectedLang,
+    });
 
-    try {
-      explanation = await provider.generateExplanation(
-        detectedLang === "ur"
-          ? `${question}\n\nجواب اردو میں دیں۔`
-          : question,
-        result,
-        aiApiKey,
-        aiBaseUrl,
-        aiModel,
-      );
-    } catch {}
+    if (shouldUseAiExplanation()) {
+      try {
+        explanation = await provider.generateExplanation(
+          detectedLang === "ur"
+            ? `${question}\n\nجواب اردو میں دیں۔`
+            : question,
+          result,
+          aiApiKey,
+          aiBaseUrl,
+          aiModel,
+        );
+      } catch {}
+    }
 
     const actions =
       widgetMode === "erp"
@@ -969,11 +1193,12 @@ export async function POST(req: Request) {
       },
       { headers: CORS },
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const sqlErrorMessage = err instanceof Error ? err.message : String(err);
     try {
       const rawFixed = await provider.fixSQL(
         sql,
-        err.message,
+        sqlErrorMessage,
         JSON.stringify(schemaWithHint),
         aiApiKey,
         aiBaseUrl,
@@ -1023,28 +1248,31 @@ export async function POST(req: Request) {
         role: botContext.role,
         global: botContext.allowGlobal,
       });
-      const rawResult = (await userPrisma.$queryRawUnsafe(fixedSql)) as any[];
+      const rawResult = (await userPrisma.$queryRawUnsafe(fixedSql)) as QueryRow[];
       let result = serialize(rawResult);
       result = filterSmartResult(result);
       const visualization = detectViz(result, question);
       if (visualization === "stacked") result = pivotStacked(result);
 
-      let explanation =
-        detectedLang === "ur"
-          ? `${result.length} نتائج ملے۔`
-          : `Found ${result.length} result(s).`;
+      let explanation = buildLocalExplanation({
+        question,
+        result,
+        detectedLang,
+      });
 
-      try {
-        explanation = await provider.generateExplanation(
-          detectedLang === "ur"
-            ? `${question}\n\nجواب اردو میں دیں۔`
-            : question,
-          result,
-          aiApiKey,
-          aiBaseUrl,
-          aiModel,
-        );
-      } catch {}
+      if (shouldUseAiExplanation()) {
+        try {
+          explanation = await provider.generateExplanation(
+            detectedLang === "ur"
+              ? `${question}\n\nجواب اردو میں دیں۔`
+              : question,
+            result,
+            aiApiKey,
+            aiBaseUrl,
+            aiModel,
+          );
+        } catch {}
+      }
 
       const actions =
         widgetMode === "erp"
@@ -1088,7 +1316,7 @@ export async function POST(req: Request) {
         },
         { headers: CORS },
       );
-    } catch (fixErr: any) {
+    } catch (fixErr: unknown) {
       await prisma.chatLog
         .create({
           data: {
@@ -1101,7 +1329,9 @@ export async function POST(req: Request) {
         })
         .catch(() => {});
 
-      const fe = friendlyError(fixErr.message);
+      const fe = friendlyError(
+        fixErr instanceof Error ? fixErr.message : String(fixErr),
+      );
       return Response.json(
         { error: fe.message, errorType: fe.errorType },
         { status: 500, headers: CORS },

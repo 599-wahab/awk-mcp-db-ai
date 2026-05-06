@@ -27,8 +27,7 @@ export class AIProviderFactory {
   static getDefaultModel(provider: AIProviderType): string {
     switch (provider) {
       case 'gemini':
-        // Updated default model for fallback
-        return 'gemini-3-flash-preview';
+        return 'gemini-2.5-flash';
       case 'openai':
         return 'gpt-3.5-turbo';
       case 'anthropic':
