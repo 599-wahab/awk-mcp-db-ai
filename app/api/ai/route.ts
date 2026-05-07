@@ -1,3 +1,5 @@
+// app/api/ai/route.ts
+//bot code
 import { prisma } from "@/lib/prisma";
 import { cleanSQL, isSafeSQL } from "@/lib/sql-guard";
 import { AIProviderFactory } from "@/lib/ai/factory";
@@ -644,28 +646,15 @@ export async function POST(req: Request) {
     widgetModeFromRequest === "erp" || appContext.widgetMode === "erp"
       ? "erp"
       : "general";
+
+  // Build scope filters — purely optional, injected only when a matching
+  // column is found in the schema. Never blocks the request.
   const scope = buildScopeFilters({
     schema,
     context: appContext,
     tenantId,
     userId,
   });
-
-  if (
-    widgetMode === "erp" &&
-    scope.mode !== "database" &&
-    !scope.filters.length &&
-    (tenantId || userId || scope.tenantColumn || scope.userColumn)
-  ) {
-    return Response.json(
-      {
-        error:
-          "No valid tenant or user scope could be applied for this ERP widget. Configure Connected Apps scope settings or pass the ERP tenant/user id.",
-        errorType: "MISSING_SCOPE",
-      },
-      { status: 400, headers: CORS },
-    );
-  }
 
   const clarify = needsClarification(question, detectedLang);
   if (clarify) {

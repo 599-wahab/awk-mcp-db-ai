@@ -1,4 +1,5 @@
 // public/embed.js
+//bot code
 // Paste this in ANY app: <script src="https://your-awkt.vercel.app/embed.js" data-api-key="YOUR_KEY"></script>
 // Optional: Pass user info for auto-recognition
 // <script src="..." data-api-key="YOUR_KEY" data-widget-mode="erp" data-tenant-id="TENANT_ID" data-user-id="123" data-user-email="user@erp.com"></script>

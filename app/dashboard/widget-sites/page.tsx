@@ -1,6 +1,6 @@
 "use client";
 // app/dashboard/widget-sites/page.tsx — AWK TLD BOT theme
-
+//bot code
 import { useState, useEffect } from "react";
 
 interface App {

@@ -1,6 +1,6 @@
 "use client";
 // app/widget/page.tsx - popup iframe loaded by embed.js
-
+//bot code
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Charts from "@/app/components/charts/Charts";
