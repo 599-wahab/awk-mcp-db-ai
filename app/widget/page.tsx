@@ -149,11 +149,6 @@ function WidgetChat() {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
       };
-      if (tenantId) headers["x-tenant-id"] = tenantId;
-      if (companyId) headers["x-company-id"] = companyId;
-      if (widgetMode) headers["x-widget-mode"] = widgetMode;
-      if (userId) headers["x-user-id"] = userId;
-      if (userEmail) headers["x-user-email"] = userEmail;
 
       const response = await fetch("/api/ai", {
         method: "POST",

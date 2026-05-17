@@ -14,6 +14,25 @@ interface Message {
   insights?: string[];
 }
 
+type AppContext = {
+  widgetMode?: string;
+  testContext?: {
+    tenantId?: string;
+    userId?: string;
+    userEmail?: string;
+  };
+};
+
+function parseContext(raw?: string | null): AppContext {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export default function ChatBox() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [question, setQuestion] = useState("");
@@ -22,7 +41,7 @@ export default function ChatBox() {
   const [ttsOn, setTtsOn] = useState(false);
   const [viewTypes, setViewTypes] = useState<Record<string, string>>({});
   const [selectedAppKey, setSelectedAppKey] = useState<string>("");
-  const [apps, setApps] = useState<{ id: string; name: string; apiKey: string }[]>([]);
+  const [apps, setApps] = useState<{ id: string; name: string; apiKey: string; contextJson?: string | null }[]>([]);
   const stopRecRef = useRef<(() => void) | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -50,11 +69,29 @@ export default function ChatBox() {
     setQuestion("");
     setLoading(true);
 
+    const selectedApp = apps.find(app => app.apiKey === selectedAppKey);
+    const context = parseContext(selectedApp?.contextJson);
+    const testContext = context.testContext || {};
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-api-key": selectedAppKey,
+    };
+    if (testContext.tenantId) headers["x-tenant-id"] = testContext.tenantId;
+    if (testContext.userId) headers["x-user-id"] = testContext.userId;
+    if (testContext.userEmail) headers["x-user-email"] = testContext.userEmail;
+    if (context.widgetMode) headers["x-widget-mode"] = context.widgetMode;
+
     try {
       const res = await fetch("/api/ai", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": selectedAppKey },
-        body: JSON.stringify({ question: text }),
+        headers,
+        body: JSON.stringify({
+          question: text,
+          tenant_id: testContext.tenantId || undefined,
+          userId: testContext.userId || undefined,
+          userEmail: testContext.userEmail || undefined,
+          widgetMode: context.widgetMode || undefined,
+        }),
       });
       const data = await res.json();
       const aiMsg: Message = {

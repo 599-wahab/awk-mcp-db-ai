@@ -59,6 +59,9 @@ export default function WidgetSitesPage() {
     dbUrl: "",
     origin: "",
     dbType: "POSTGRESQL",
+    testTenantId: "",
+    testUserId: "",
+    testUserEmail: "",
   });
 
   useEffect(() => { fetchApps(); }, []);
@@ -147,6 +150,9 @@ export default function WidgetSitesPage() {
       dbUrl: "",
       origin: app.origin || "",
       dbType: app.dbType || "POSTGRESQL",
+      testTenantId: "",
+      testUserId: "",
+      testUserEmail: "",
     });
     setEditOriginalDbUrl("");
     setEditLoading(true);
@@ -157,12 +163,17 @@ export default function WidgetSitesPage() {
       if (!res.ok) throw new Error(data.error || "Could not load app data.");
 
       const dbUrl = data.dbUrl || "";
+      const context = parseContext(app.contextJson);
+      const testContext = context?.testContext || {};
       setEditOriginalDbUrl(dbUrl);
       setEditForm({
         name: data.name || app.name,
         dbUrl,
         origin: data.origin || "",
         dbType: data.dbType || app.dbType || "POSTGRESQL",
+        testTenantId: testContext.tenantId || "",
+        testUserId: testContext.userId || "",
+        testUserEmail: testContext.userEmail || "",
       });
     } catch (error) {
       setEditError(
@@ -188,11 +199,21 @@ export default function WidgetSitesPage() {
     setEditError("");
     setEditSaved(false);
 
-    const payload: Record<string, string> = {
+    const app = apps.find(item => item.id === editingId);
+    const context = parseContext(app?.contextJson);
+    const payload: Record<string, unknown> = {
       id: editingId,
       name: editForm.name.trim(),
       origin: editForm.origin.trim(),
       dbType: editForm.dbType,
+      contextJson: {
+        ...context,
+        testContext: {
+          tenantId: editForm.testTenantId.trim() || undefined,
+          userId: editForm.testUserId.trim() || undefined,
+          userEmail: editForm.testUserEmail.trim() || undefined,
+        },
+      },
     };
 
     if (editForm.dbUrl.trim() !== editOriginalDbUrl) {
@@ -485,6 +506,39 @@ export default function WidgetSitesPage() {
                             <option value="MYSQL">MySQL</option>
                           </select>
                         </div>
+                      </div>
+                      <div className="border-t border-[#1e1e1e] pt-3">
+                        <p className="fm text-[10px] text-[#e8ff47] uppercase tracking-wider mb-2">Test Context</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Tenant ID</label>
+                            <input
+                              value={editForm.testTenantId}
+                              onChange={e => setEditForm(f => ({ ...f, testTenantId: e.target.value }))}
+                              placeholder="tenant uuid"
+                              className="w-full bg-[#0d0d0d] border border-[#1e1e1e] text-white px-3 py-2.5 text-xs focus:outline-none focus:border-[#e8ff47] transition-colors font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">User ID</label>
+                            <input
+                              value={editForm.testUserId}
+                              onChange={e => setEditForm(f => ({ ...f, testUserId: e.target.value }))}
+                              placeholder="optional"
+                              className="w-full bg-[#0d0d0d] border border-[#1e1e1e] text-white px-3 py-2.5 text-xs focus:outline-none focus:border-[#e8ff47] transition-colors font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">User Email</label>
+                            <input
+                              value={editForm.testUserEmail}
+                              onChange={e => setEditForm(f => ({ ...f, testUserEmail: e.target.value }))}
+                              placeholder="optional"
+                              className="w-full bg-[#0d0d0d] border border-[#1e1e1e] text-white px-3 py-2.5 text-xs focus:outline-none focus:border-[#e8ff47] transition-colors"
+                            />
+                          </div>
+                        </div>
+                        <p className="fm text-[10px] text-[#3a3a3a] mt-2">Used only by this bot dashboard AI Chat page when the app scope is tenant/user/hybrid.</p>
                       </div>
 
                       {editError && (

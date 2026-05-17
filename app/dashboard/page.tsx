@@ -50,7 +50,31 @@ interface Message {
   feedback?: "like" | "dislike" | null;
 }
 
-interface App { id: string; name: string; apiKey: string; }
+interface App {
+  id: string;
+  name: string;
+  apiKey: string;
+  contextJson?: string | null;
+}
+
+type AppContext = {
+  widgetMode?: string;
+  testContext?: {
+    tenantId?: string;
+    userId?: string;
+    userEmail?: string;
+  };
+};
+
+function parseContext(raw?: string | null): AppContext {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 // ── Error Toast ───────────────────────────────────────────────────────────────
 function ErrorToast({ message, errorType, onClose }: {
@@ -247,11 +271,30 @@ export default function DashboardPage() {
     setQuestion("");
     setLoading(true);
 
+    const selectedApp = apps.find(app => app.apiKey === selectedKey);
+    const context = parseContext(selectedApp?.contextJson);
+    const testContext = context.testContext || {};
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-api-key": selectedKey,
+    };
+    if (testContext.tenantId) headers["x-tenant-id"] = testContext.tenantId;
+    if (testContext.userId) headers["x-user-id"] = testContext.userId;
+    if (testContext.userEmail) headers["x-user-email"] = testContext.userEmail;
+    if (context.widgetMode) headers["x-widget-mode"] = context.widgetMode;
+
     try {
       const res = await fetch("/api/ai", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": selectedKey },
-        body: JSON.stringify({ question: text, preferredLang }),
+        headers,
+        body: JSON.stringify({
+          question: text,
+          preferredLang,
+          tenant_id: testContext.tenantId || undefined,
+          userId: testContext.userId || undefined,
+          userEmail: testContext.userEmail || undefined,
+          widgetMode: context.widgetMode || undefined,
+        }),
       });
       const data = await res.json();
 
@@ -270,7 +313,7 @@ export default function DashboardPage() {
       } else {
         setMessages(m => [...m, {
           id: (Date.now() + 1).toString(),
-          content: data.explanation || (isUr ? "ہو گیا۔" : "Done."),
+          content: data.response || data.explanation || data.message || (isUr ? "ہو گیا۔" : "Done."),
           isUser: false, timestamp: new Date(),
           sql: data.sql, result: data.result,
           visualization: data.visualization,
@@ -289,7 +332,7 @@ export default function DashboardPage() {
       }]);
     }
     setLoading(false);
-  }, [selectedKey, preferredLang, ttsOn, isUr, speak]);
+  }, [apps, selectedKey, preferredLang, ttsOn, isUr, speak]);
 
   function handleMic() {
     if (recording) { stopRef.current?.(); setRecording(false); return; }

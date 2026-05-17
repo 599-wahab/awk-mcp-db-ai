@@ -10,7 +10,7 @@ const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, x-api-key, X-API-Key, x-tenant-id, x-company-id, x-user-id, x-user-email, x-widget-mode",
+    "Content-Type, x-api-key, X-API-Key, x-tenant-id, X-Tenant-ID, x-company-id, X-Company-ID, x-user-id, X-User-ID, x-user-email, X-User-Email, x-user-role, X-User-Role, x-widget-mode, X-Widget-Mode",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -436,6 +436,23 @@ function sanitizeRouteMap(routeMap: Record<string, string> | undefined) {
 
 function normalizeValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getNestedValue(source: unknown, path: string[]): string {
+  let current = source;
+  for (const key of path) {
+    if (!current || typeof current !== "object") return "";
+    current = (current as Record<string, unknown>)[key];
+  }
+  return normalizeValue(current);
+}
+
+function firstValue(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = normalizeValue(value);
+    if (normalized) return normalized;
+  }
+  return "";
 }
 
 function normalizeWidgetMode(value: unknown): WidgetMode {
@@ -947,6 +964,19 @@ function isUnableToQueryResult(result: any[]) {
 }
 
 export async function POST(req: Request) {
+  try {
+    return await handlePost(req);
+  } catch (error) {
+    console.error("Unhandled AI route error:", error);
+    return errorResponse(
+      "The bot server hit an unexpected error before it could complete the request. Please try again, and check the hosted bot logs if it repeats.",
+      "SERVER_ERROR",
+      500,
+    );
+  }
+}
+
+async function handlePost(req: Request) {
   const apiKey =
     req.headers.get("x-api-key") || req.headers.get("X-API-Key") || "";
 
@@ -963,34 +993,59 @@ export async function POST(req: Request) {
 
   const question = normalizeValue(body?.question);
   const preferredLang = body?.preferredLang;
-  const tenantId =
-    normalizeValue(body?.tenant_id) ||
-    normalizeValue(body?.tenantId) ||
-    normalizeValue(body?.company_id) ||
-    normalizeValue(body?.companyId) ||
-    normalizeValue(req.headers.get("x-company-id")) ||
-    normalizeValue(req.headers.get("x-tenant-id"));
-  const userId =
-    normalizeValue(body?.userId) ||
-    normalizeValue(body?.user_id) ||
-    normalizeValue(req.headers.get("x-user-id"));
-  const userEmail =
-    normalizeValue(body?.userEmail) ||
-    normalizeValue(body?.user_email) ||
-    normalizeValue(req.headers.get("x-user-email"));
-  const widgetModeFromRequest =
-    normalizeValue(body?.widgetMode) ||
-    normalizeValue(req.headers.get("x-widget-mode"));
   const chatHistory = Array.isArray(body?.chatHistory)
     ? (body.chatHistory as ChatHistoryItem[])
     : [];
   const erpContext =
     body?.erpContext && typeof body.erpContext === "object" ? body.erpContext : {};
+  const tenantId = firstValue(
+    body?.tenant_id,
+    body?.tenantId,
+    body?.company_id,
+    body?.companyId,
+    getNestedValue(erpContext, ["tenantId"]),
+    getNestedValue(erpContext, ["tenant_id"]),
+    getNestedValue(erpContext, ["companyId"]),
+    getNestedValue(erpContext, ["company_id"]),
+    getNestedValue(body, ["tenant", "id"]),
+    getNestedValue(body, ["company", "id"]),
+    getNestedValue(body, ["metadata", "tenantId"]),
+    getNestedValue(body, ["metadata", "companyId"]),
+    req.headers.get("x-company-id"),
+    req.headers.get("x-tenant-id"),
+  );
+  const userId = firstValue(
+    body?.userId,
+    body?.user_id,
+    getNestedValue(erpContext, ["userId"]),
+    getNestedValue(erpContext, ["user_id"]),
+    getNestedValue(body, ["user", "id"]),
+    getNestedValue(body, ["metadata", "userId"]),
+    req.headers.get("x-user-id"),
+  );
+  const userEmail = firstValue(
+    body?.userEmail,
+    body?.user_email,
+    getNestedValue(erpContext, ["userEmail"]),
+    getNestedValue(erpContext, ["user_email"]),
+    getNestedValue(body, ["user", "email"]),
+    getNestedValue(body, ["metadata", "userEmail"]),
+    req.headers.get("x-user-email"),
+  );
+  const widgetModeFromRequest = firstValue(
+    body?.widgetMode,
+    getNestedValue(erpContext, ["widgetMode"]),
+    getNestedValue(body, ["metadata", "widgetMode"]),
+    req.headers.get("x-widget-mode"),
+  );
   const currentPage =
-    normalizeValue(body?.currentPage) ||
-    normalizeValue(body?.currentPath) ||
-    normalizeValue(erpContext?.currentPage) ||
-    normalizeValue(erpContext?.currentPath);
+    firstValue(
+      body?.currentPage,
+      body?.currentPath,
+      getNestedValue(erpContext, ["currentPage"]),
+      getNestedValue(erpContext, ["currentPath"]),
+      getNestedValue(body, ["metadata", "currentPath"]),
+    );
 
   if (!question) {
     return errorResponse("Question is required.", "QUESTION_REQUIRED", 400);
