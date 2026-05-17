@@ -48,6 +48,18 @@ export default function WidgetSitesPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [rebuildingId, setRebuildingId] = useState<string | null>(null);
   const [newApp, setNewApp] = useState<{ apiKey: string; snippet: string; name: string } | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [editSaved, setEditSaved] = useState(false);
+  const [editOriginalDbUrl, setEditOriginalDbUrl] = useState("");
+  const [editForm, setEditForm] = useState({
+    name: "",
+    dbUrl: "",
+    origin: "",
+    dbType: "POSTGRESQL",
+  });
 
   useEffect(() => { fetchApps(); }, []);
 
@@ -113,6 +125,90 @@ export default function WidgetSitesPage() {
     setRebuildingId(null);
     if (data.success) { alert(`✅ Schema rebuilt! Found ${data.tables} tables.`); fetchApps(); }
     else alert("❌ Failed: " + (data.error || "Unknown error"));
+  }
+
+  async function openDataEditor(app: App) {
+    const nextId = editingId === app.id ? null : app.id;
+    setEditingId(nextId);
+    setEditError("");
+    setEditSaved(false);
+
+    if (!nextId) return;
+
+    setEditForm({
+      name: app.name,
+      dbUrl: "",
+      origin: app.origin || "",
+      dbType: app.dbType || "POSTGRESQL",
+    });
+    setEditOriginalDbUrl("");
+    setEditLoading(true);
+
+    try {
+      const res = await fetch(`/api/settings?appId=${app.id}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load app data.");
+
+      const dbUrl = data.dbUrl || "";
+      setEditOriginalDbUrl(dbUrl);
+      setEditForm({
+        name: data.name || app.name,
+        dbUrl,
+        origin: data.origin || "",
+        dbType: data.dbType || app.dbType || "POSTGRESQL",
+      });
+    } catch (error) {
+      setEditError(
+        error instanceof Error ? error.message : "Could not load app data.",
+      );
+    } finally {
+      setEditLoading(false);
+    }
+  }
+
+  async function saveDataEditor() {
+    if (!editingId) return;
+    if (!editForm.name.trim()) {
+      setEditError("App name is required.");
+      return;
+    }
+    if (!editForm.dbUrl.trim()) {
+      setEditError("Database URL is required.");
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError("");
+    setEditSaved(false);
+
+    const payload: Record<string, string> = {
+      id: editingId,
+      name: editForm.name.trim(),
+      origin: editForm.origin.trim(),
+      dbType: editForm.dbType,
+    };
+
+    if (editForm.dbUrl.trim() !== editOriginalDbUrl) {
+      payload.dbUrl = editForm.dbUrl.trim();
+    }
+
+    try {
+      const res = await fetch("/api/widget/register", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Save failed.");
+
+      setEditSaved(true);
+      setEditOriginalDbUrl(editForm.dbUrl.trim());
+      await fetchApps();
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Save failed.");
+    } finally {
+      setEditSaving(false);
+    }
   }
 
   function copy(text: string, key: string) {
@@ -311,6 +407,10 @@ export default function WidgetSitesPage() {
                     className="fm text-[10px] border border-[#1e1e1e] text-[#5a5a5a] px-3 py-1.5 hover:border-[#e8ff47] hover:text-[#e8ff47] transition-colors">
                     {copied === app.id + "k" ? "✓ Copied" : "Copy Key"}
                   </button>
+                  <button onClick={() => openDataEditor(app)}
+                    className={`fm text-[10px] border px-3 py-1.5 transition-colors ${editingId === app.id ? "border-[#e8ff47] text-[#e8ff47]" : "border-[#1e1e1e] text-[#5a5a5a] hover:border-[#e8ff47] hover:text-[#e8ff47]"}`}>
+                    {editingId === app.id ? "Close Data" : "Data"}
+                  </button>
                   <button onClick={() => rebuildSchema(app.id)} disabled={rebuildingId === app.id}
                     className="fm text-[10px] border border-[#1e1e1e] text-[#5a5a5a] px-3 py-1.5 hover:border-[#e8ff47] hover:text-[#e8ff47] transition-colors disabled:opacity-50">
                     {rebuildingId === app.id ? "Building..." : "Rebuild Schema"}
@@ -321,6 +421,89 @@ export default function WidgetSitesPage() {
                   </button>
                 </div>
               </div>
+
+              {editingId === app.id && (
+                <div className="mx-5 mb-5 border border-[#e8ff47]/30 bg-black p-4">
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                      <p className="fd text-lg tracking-wide text-white">APP DATA</p>
+                      <p className="fm text-[10px] text-[#5a5a5a]">Edit app name or database connection.</p>
+                    </div>
+                    {editSaved && (
+                      <span className="fm text-[10px] text-[#e8ff47]">Saved</span>
+                    )}
+                  </div>
+
+                  {editLoading ? (
+                    <div className="fm text-xs text-[#5a5a5a] py-4">Loading app data...</div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">App Name *</label>
+                        <input
+                          value={editForm.name}
+                          onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                          className="w-full bg-[#0d0d0d] border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Database URL *</label>
+                        <textarea
+                          value={editForm.dbUrl}
+                          onChange={e => setEditForm(f => ({ ...f, dbUrl: e.target.value }))}
+                          rows={3}
+                          className="w-full bg-[#0d0d0d] border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors font-mono resize-none"
+                          dir="ltr"
+                        />
+                        <p className="fm text-[10px] text-[#3a3a3a] mt-1">Changing this clears the cached schema; click Rebuild Schema after saving.</p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Origin</label>
+                          <input
+                            value={editForm.origin}
+                            onChange={e => setEditForm(f => ({ ...f, origin: e.target.value }))}
+                            placeholder="https://myerp.vercel.app"
+                            className="w-full bg-[#0d0d0d] border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
+                          />
+                        </div>
+                        <div>
+                          <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">DB Type</label>
+                          <select
+                            value={editForm.dbType}
+                            onChange={e => setEditForm(f => ({ ...f, dbType: e.target.value }))}
+                            className="w-full bg-[#0d0d0d] border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47] transition-colors"
+                          >
+                            <option value="POSTGRESQL">PostgreSQL</option>
+                            <option value="MYSQL">MySQL</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {editError && (
+                        <p className="fm text-xs text-red-400">{editError}</p>
+                      )}
+
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          onClick={saveDataEditor}
+                          disabled={editSaving || !editForm.name.trim() || !editForm.dbUrl.trim()}
+                          className="fd text-base tracking-wide px-6 py-2 text-black disabled:opacity-50 transition hover:-translate-y-0.5"
+                          style={{ background: "#e8ff47" }}
+                        >
+                          {editSaving ? "SAVING..." : "SAVE DATA"}
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="fm text-xs border border-[#1e1e1e] text-[#5a5a5a] px-4 hover:border-[#e8ff47] hover:text-white transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Embed snippet */}
               <div className="mx-5 mb-5 bg-black border border-[#1e1e1e] p-3 relative">
