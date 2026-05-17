@@ -1,8 +1,21 @@
 // lib/ai/providers/anthropic.ts
 import { AIProvider } from '../types';
+import {
+  buildExplanationPrompt,
+  buildFixSqlPrompt,
+  buildSqlPrompt,
+} from '../sql-prompts';
 
 export class AnthropicProvider implements AIProvider {
   private defaultModel = 'claude-3-haiku-20240307';
+
+  private getMessagesUrl(baseUrl?: string) {
+    if (!baseUrl) return 'https://api.anthropic.com/v1/messages';
+    const trimmed = baseUrl.replace(/\/+$/, '');
+    if (trimmed.endsWith('/v1/messages')) return trimmed;
+    if (trimmed.endsWith('/v1')) return `${trimmed}/messages`;
+    return `${trimmed}/v1/messages`;
+  }
 
   private async callAnthropic(
     prompt: string,
@@ -10,7 +23,7 @@ export class AnthropicProvider implements AIProvider {
     baseUrl?: string,
     model?: string
   ): Promise<string> {
-    const url = baseUrl || 'https://api.anthropic.com/v1/messages';
+    const url = this.getMessagesUrl(baseUrl);
     const modelName = model || this.defaultModel;
 
     const response = await fetch(url, {
@@ -41,44 +54,16 @@ export class AnthropicProvider implements AIProvider {
 
   async generateSQL(question: string, schema: string, apiKey?: string, baseUrl?: string, model?: string): Promise<string> {
     if (!apiKey) throw new Error('NO_KEY');
-    const prompt = `You are a SQL expert. Convert this question into a SQL query.
-
-Database Schema:
-${schema}
-
-Question: ${question}
-
-Rules:
-- Return ONLY the SQL query, no explanation
-- Use proper JOINs when needed
-- Use aggregate functions appropriately
-- Ensure the query is safe (SELECT only)
-- Use LIMIT 100 for large result sets
-
-SQL:`;
-    return this.callAnthropic(prompt, apiKey, baseUrl, model);
+    return this.callAnthropic(buildSqlPrompt(question, schema), apiKey, baseUrl, model);
   }
 
   async generateExplanation(question: string, result: any[], apiKey?: string, baseUrl?: string, model?: string): Promise<string> {
     if (!apiKey) return `Found ${result.length} result(s).`;
-    const prompt = `Explain these query results in simple terms.
-
-Question: ${question}
-Results (first 5 rows): ${JSON.stringify(result.slice(0, 5))}
-
-Provide a brief, helpful explanation in 1-2 sentences:`;
-    return this.callAnthropic(prompt, apiKey, baseUrl, model);
+    return this.callAnthropic(buildExplanationPrompt(question, result), apiKey, baseUrl, model);
   }
 
   async fixSQL(sql: string, error: string, schema: string, apiKey?: string, baseUrl?: string, model?: string): Promise<string> {
     if (!apiKey) throw new Error('NO_KEY');
-    const prompt = `Fix this failing SQL query.
-
-Original SQL: ${sql}
-Error: ${error}
-Schema: ${schema}
-
-Return ONLY the corrected SELECT SQL query:`;
-    return this.callAnthropic(prompt, apiKey, baseUrl, model);
+    return this.callAnthropic(buildFixSqlPrompt(sql, error, schema), apiKey, baseUrl, model);
   }
 }

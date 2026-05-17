@@ -44,6 +44,13 @@ export function isSafeSQL(sql: string): boolean {
     return false;
   }
 
+  // Disallow stacked statements. cleanSQL removes one trailing semicolon, so any
+  // remaining semicolon is an attempt to run more than one statement.
+  if (trimmed.includes(';')) {
+    console.warn('SQL rejected: multiple statements:', trimmed.slice(0, 100));
+    return false;
+  }
+
   // Check for dangerous keywords
   for (const pattern of DANGEROUS_KEYWORDS) {
     if (pattern.test(trimmed)) {

@@ -1,8 +1,20 @@
 // lib/ai/providers/openai.ts
 import { AIProvider } from '../types';
+import {
+  buildExplanationPrompt,
+  buildFixSqlPrompt,
+  buildSqlPrompt,
+} from '../sql-prompts';
 
 export class OpenAIProvider implements AIProvider {
   private defaultModel = 'gpt-3.5-turbo';
+
+  private getChatCompletionsUrl(baseUrl?: string) {
+    if (!baseUrl) return 'https://api.openai.com/v1/chat/completions';
+    const trimmed = baseUrl.replace(/\/+$/, '');
+    if (trimmed.endsWith('/chat/completions')) return trimmed;
+    return `${trimmed}/chat/completions`;
+  }
 
   private async callOpenAI(
     prompt: string,
@@ -10,7 +22,7 @@ export class OpenAIProvider implements AIProvider {
     baseUrl?: string,
     model?: string
   ): Promise<string> {
-    const url = baseUrl || 'https://api.openai.com/v1/chat/completions';
+    const url = this.getChatCompletionsUrl(baseUrl);
     const modelName = model || this.defaultModel;
 
     const response = await fetch(url, {
@@ -40,44 +52,16 @@ export class OpenAIProvider implements AIProvider {
 
   async generateSQL(question: string, schema: string, apiKey?: string, baseUrl?: string, model?: string): Promise<string> {
     if (!apiKey) throw new Error('NO_KEY');
-    const prompt = `You are a SQL expert. Convert this question into a SQL query.
-
-Database Schema:
-${schema}
-
-Question: ${question}
-
-Rules:
-- Return ONLY the SQL query, no explanation
-- Use proper JOINs when needed
-- Use aggregate functions appropriately
-- Ensure the query is safe (SELECT only)
-- Use LIMIT 100 for large result sets
-
-SQL:`;
-    return this.callOpenAI(prompt, apiKey, baseUrl, model);
+    return this.callOpenAI(buildSqlPrompt(question, schema), apiKey, baseUrl, model);
   }
 
   async generateExplanation(question: string, result: any[], apiKey?: string, baseUrl?: string, model?: string): Promise<string> {
     if (!apiKey) return `Found ${result.length} result(s).`;
-    const prompt = `Explain these query results in simple terms.
-
-Question: ${question}
-Results (first 5 rows): ${JSON.stringify(result.slice(0, 5))}
-
-Provide a brief, helpful explanation in 1-2 sentences:`;
-    return this.callOpenAI(prompt, apiKey, baseUrl, model);
+    return this.callOpenAI(buildExplanationPrompt(question, result), apiKey, baseUrl, model);
   }
 
   async fixSQL(sql: string, error: string, schema: string, apiKey?: string, baseUrl?: string, model?: string): Promise<string> {
     if (!apiKey) throw new Error('NO_KEY');
-    const prompt = `Fix this failing SQL query.
-
-Original SQL: ${sql}
-Error: ${error}
-Schema: ${schema}
-
-Return ONLY the corrected SELECT SQL query:`;
-    return this.callOpenAI(prompt, apiKey, baseUrl, model);
+    return this.callOpenAI(buildFixSqlPrompt(sql, error, schema), apiKey, baseUrl, model);
   }
 }

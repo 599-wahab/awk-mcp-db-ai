@@ -136,7 +136,7 @@ export async function POST(req: Request) {
     id: app.id,
     name: app.name,
     apiKey: app.apiKey,
-    snippet: `<script src="${baseUrl}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="erp" data-tenant-id="ERP_TENANT_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`,
+    snippet: `<script src="${baseUrl}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="erp-dashboard" data-tenant-id="ERP_TENANT_ID" data-company-id="ERP_COMPANY_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`,
   });
 }
 

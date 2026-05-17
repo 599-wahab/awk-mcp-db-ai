@@ -59,7 +59,8 @@ export default function ChatBox() {
       const data = await res.json();
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
-        content: data.explanation || data.error || "Something went wrong.",
+        content:
+          data.response || data.explanation || data.message || data.error || "Something went wrong.",
         isUser: false,
         timestamp: new Date(),
         sql: data.sql,

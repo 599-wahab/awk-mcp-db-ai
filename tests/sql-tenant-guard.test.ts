@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   injectTenantScopeSQL,
+  isSafeSQL,
   validateTenantScopedSQL,
 } from "../lib/sql-guard";
 
@@ -87,4 +88,8 @@ test("Superadmin explicit global query may bypass tenant filter", () => {
   });
 
   assert.deepEqual(result, { ok: true });
+});
+
+test("Stacked SQL statements are rejected", () => {
+  assert.equal(isSafeSQL("SELECT * FROM staff; SELECT * FROM products"), false);
 });

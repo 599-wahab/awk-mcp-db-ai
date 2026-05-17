@@ -39,7 +39,7 @@ export default function WidgetSitesPage() {
     dbUrl: "",
     dbType: "POSTGRESQL",
     geminiKey: "",
-    widgetMode: "erp",
+    widgetMode: "erp-dashboard",
     scopeMode: "auto",
     tenantColumn: "tenant_id",
     userColumn: "user_id",
@@ -91,7 +91,7 @@ export default function WidgetSitesPage() {
       dbUrl: "",
       dbType: "POSTGRESQL",
       geminiKey: "",
-      widgetMode: "erp",
+      widgetMode: "erp-dashboard",
       scopeMode: "auto",
       tenantColumn: "tenant_id",
       userColumn: "user_id",
@@ -227,6 +227,7 @@ export default function WidgetSitesPage() {
                 <label className="fm block text-[10px] text-[#5a5a5a] uppercase tracking-wider mb-1.5">Widget Mode</label>
                 <select value={form.widgetMode} onChange={e => setForm(f => ({ ...f, widgetMode: e.target.value }))}
                   className="w-full bg-black border border-[#1e1e1e] text-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#e8ff47]">
+                  <option value="erp-dashboard">ERP dashboard safe mode</option>
                   <option value="erp">ERP safe mode</option>
                   <option value="general">General chat mode</option>
                 </select>
@@ -325,10 +326,10 @@ export default function WidgetSitesPage() {
               <div className="mx-5 mb-5 bg-black border border-[#1e1e1e] p-3 relative">
                 <p className="fm text-[10px] text-[#3a3a3a] mb-1.5">// Embed in your app before &lt;/body&gt;:</p>
                 <code className="fm text-xs text-[#e8ff47] break-all">
-                  {`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="${widgetMode}" data-tenant-id="ERP_TENANT_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`}
+                  {`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="${widgetMode}" data-tenant-id="ERP_TENANT_ID" data-company-id="ERP_COMPANY_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`}
                 </code>
                 <button
-                  onClick={() => copy(`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="${widgetMode}" data-tenant-id="ERP_TENANT_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`, app.id + "s")}
+                  onClick={() => copy(`<script src="${BASE_URL}/embed.js" data-api-key="${app.apiKey}" data-widget-mode="${widgetMode}" data-tenant-id="ERP_TENANT_ID" data-company-id="ERP_COMPANY_ID" data-user-id="ERP_USER_ID" data-user-email="USER_EMAIL"></script>`, app.id + "s")}
                   className="absolute top-3 right-3 fm text-[10px] bg-[#1e1e1e] text-[#5a5a5a] px-2 py-1 hover:text-[#e8ff47] transition-colors"
                 >
                   {copied === app.id + "s" ? "✓" : "Copy"}

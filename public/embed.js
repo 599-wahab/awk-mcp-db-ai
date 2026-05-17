@@ -2,7 +2,7 @@
 //bot code
 // Paste this in ANY app: <script src="https://your-awkt.vercel.app/embed.js" data-api-key="YOUR_KEY"></script>
 // Optional: Pass user info for auto-recognition
-// <script src="..." data-api-key="YOUR_KEY" data-widget-mode="erp" data-tenant-id="TENANT_ID" data-user-id="123" data-user-email="user@erp.com"></script>
+// <script src="..." data-api-key="YOUR_KEY" data-widget-mode="erp-dashboard" data-tenant-id="TENANT_ID" data-company-id="COMPANY_ID" data-user-id="123" data-user-email="user@erp.com"></script>
 
 (function () {
   "use strict";
@@ -13,9 +13,11 @@
   var tag = document.currentScript;
   var API_KEY = tag ? tag.getAttribute("data-api-key") : "";
   var TENANT_ID = tag ? tag.getAttribute("data-tenant-id") || "" : "";
+  var COMPANY_ID = tag ? tag.getAttribute("data-company-id") || "" : "";
   var USER_ID = tag ? tag.getAttribute("data-user-id") || "" : "";
   var USER_EMAIL = tag ? tag.getAttribute("data-user-email") || "" : "";
   var WIDGET_MODE = tag ? tag.getAttribute("data-widget-mode") || "general" : "general";
+  var CURRENT_PATH = window.location.pathname + window.location.search;
   var BASE = tag ? new URL(tag.src).origin : "";
   var PARENT_ORIGIN = window.location.origin;
   var WIDGET =
@@ -23,9 +25,11 @@
     "/widget?key=" +
     encodeURIComponent(API_KEY) +
     (TENANT_ID ? "&tenantId=" + encodeURIComponent(TENANT_ID) : "") +
+    (COMPANY_ID ? "&companyId=" + encodeURIComponent(COMPANY_ID) : "") +
     (USER_ID ? "&userId=" + encodeURIComponent(USER_ID) : "") +
     (USER_EMAIL ? "&userEmail=" + encodeURIComponent(USER_EMAIL) : "") +
     (WIDGET_MODE ? "&widgetMode=" + encodeURIComponent(WIDGET_MODE) : "") +
+    (CURRENT_PATH ? "&currentPath=" + encodeURIComponent(CURRENT_PATH) : "") +
     "&parentOrigin=" +
     encodeURIComponent(PARENT_ORIGIN);
 

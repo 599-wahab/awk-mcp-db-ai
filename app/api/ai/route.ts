@@ -10,14 +10,15 @@ const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, x-api-key, X-API-Key, x-tenant-id, x-user-id, x-user-email, x-widget-mode",
+    "Content-Type, x-api-key, X-API-Key, x-tenant-id, x-company-id, x-user-id, x-user-email, x-widget-mode",
   "Access-Control-Max-Age": "86400",
 };
 
 type ScopeMode = "auto" | "database" | "tenant" | "user" | "hybrid";
+type WidgetMode = "general" | "erp";
 
 type AppContextConfig = {
-  widgetMode?: "general" | "erp";
+  widgetMode?: "general" | "erp" | "erp-dashboard";
   dataScope?: {
     mode?: ScopeMode;
     tenantColumn?: string;
@@ -29,11 +30,29 @@ type AppContextConfig = {
 type ScopeFilter = {
   column: string;
   value: string;
+  kind: "tenant" | "user";
 };
 
 type ChatHistoryItem = {
   content?: string;
   isUser?: boolean;
+};
+
+type SchemaColumn = {
+  table_name?: string;
+  column_name?: string;
+  data_type?: string;
+  is_nullable?: string;
+};
+
+type SchemaLike = {
+  tables?: SchemaColumn[];
+  foreignKeys?: unknown[];
+};
+
+type TableRef = {
+  table: string;
+  alias: string;
 };
 
 type BotAction =
@@ -48,6 +67,22 @@ type BotAction =
     }
   | { type: "show_summary"; entity: string; payload: Record<string, unknown> }
   | { type: "clarify"; question: string; options?: string[] };
+
+type AssistantPayload = {
+  response: string;
+  explanation: string;
+  message: string;
+  sql: string | null;
+  result: any[] | null;
+  visualization: string;
+  actions: BotAction[];
+  action: BotAction | null;
+  insights: string[];
+  detectedLang: "ur" | "en";
+  chatLogId: string | null;
+  isClarification?: boolean;
+  meta?: Record<string, unknown>;
+};
 
 const DEFAULT_ROUTE_MAP: Record<string, string> = {
   dashboard: "/dashboard",
@@ -145,6 +180,64 @@ function friendlyError(msg: string): { message: string; errorType: string } {
   };
 }
 
+function buildAssistantPayload(args: {
+  explanation: string;
+  sql?: string | null;
+  result?: any[] | null;
+  visualization?: string;
+  actions?: BotAction[];
+  insights?: string[];
+  detectedLang: "ur" | "en";
+  chatLogId?: string | null;
+  isClarification?: boolean;
+  meta?: Record<string, unknown>;
+}): AssistantPayload {
+  const actions = args.actions || [];
+  return {
+    response: args.explanation,
+    explanation: args.explanation,
+    message: args.explanation,
+    sql: args.sql ?? null,
+    result: args.result ?? null,
+    visualization: args.visualization || "none",
+    actions,
+    action: actions[0] || null,
+    insights: args.insights || [],
+    detectedLang: args.detectedLang,
+    chatLogId: args.chatLogId ?? null,
+    ...(args.isClarification ? { isClarification: true } : {}),
+    ...(args.meta ? { meta: args.meta } : {}),
+  };
+}
+
+function errorResponse(
+  message: string,
+  errorType: string,
+  status = 500,
+  extras: Partial<AssistantPayload> = {},
+) {
+  const actions = extras.actions || [];
+  return Response.json(
+    {
+      error: message,
+      errorType,
+      response: message,
+      explanation: message,
+      message,
+      actions,
+      action: actions[0] || null,
+      sql: extras.sql ?? null,
+      result: extras.result ?? null,
+      visualization: extras.visualization || "none",
+      insights: extras.insights || [],
+      detectedLang: extras.detectedLang,
+      chatLogId: extras.chatLogId ?? null,
+      ...(extras.meta ? { meta: extras.meta } : {}),
+    },
+    { status, headers: CORS },
+  );
+}
+
 function serialize(result: any[]) {
   return result.map((row) => {
     const obj: Record<string, unknown> = {};
@@ -154,6 +247,41 @@ function serialize(result: any[]) {
       else obj[key] = value;
     }
     return obj;
+  });
+}
+
+const SENSITIVE_COLUMN_PATTERNS = [
+  /password/i,
+  /passcode/i,
+  /secret/i,
+  /token/i,
+  /api[_-]?key/i,
+  /access[_-]?key/i,
+  /refresh[_-]?key/i,
+  /private[_-]?key/i,
+  /hash/i,
+  /salt/i,
+  /otp/i,
+  /mfa/i,
+  /ssn/i,
+  /social[_-]?security/i,
+  /card[_-]?number/i,
+  /cvv/i,
+  /connection[_-]?string/i,
+  /database[_-]?url/i,
+];
+
+function isSensitiveColumn(column: string) {
+  return SENSITIVE_COLUMN_PATTERNS.some((pattern) => pattern.test(column));
+}
+
+function redactSensitiveFields(result: any[]): any[] {
+  return result.map((row) => {
+    const safeRow: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (!isSensitiveColumn(key)) safeRow[key] = value;
+    }
+    return safeRow;
   });
 }
 
@@ -286,8 +414,44 @@ function parseAppContext(raw: string | null | undefined): AppContextConfig {
   }
 }
 
+function isSafeRouteHref(value: unknown): value is string {
+  const href = normalizeValue(value);
+  return (
+    href.startsWith("/dashboard") &&
+    !href.includes("\n") &&
+    !href.includes("\r") &&
+    !href.toLowerCase().startsWith("javascript:")
+  );
+}
+
+function sanitizeRouteMap(routeMap: Record<string, string> | undefined) {
+  const safe: Record<string, string> = {};
+  if (!routeMap || typeof routeMap !== "object") return safe;
+
+  for (const [key, href] of Object.entries(routeMap)) {
+    if (isSafeRouteHref(href)) safe[key] = href;
+  }
+  return safe;
+}
+
 function normalizeValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeWidgetMode(value: unknown): WidgetMode {
+  const mode = normalizeValue(value).toLowerCase().replace(/[_\s]+/g, "-");
+  if (["erp", "erp-dashboard", "erp-widget", "dashboard"].includes(mode)) {
+    return "erp";
+  }
+  return "general";
+}
+
+function normalizeScopeMode(value: unknown): ScopeMode {
+  const mode = normalizeValue(value).toLowerCase();
+  if (["database", "tenant", "user", "hybrid", "auto"].includes(mode)) {
+    return mode as ScopeMode;
+  }
+  return "auto";
 }
 
 function escapeSqlLiteral(value: string): string {
@@ -298,36 +462,71 @@ function isLikelySafeScopeValue(value: string): boolean {
   return !!value && value.length <= 160 && !/[\r\n;\0]/.test(value);
 }
 
-function getSchemaColumns(schema: any): Set<string> {
+function isSafeIdentifier(value: string): boolean {
+  return /^[a-z_][a-z0-9_]*$/i.test(value);
+}
+
+function quoteIdentifier(value: string): string {
+  if (isSafeIdentifier(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function normalizeIdentifier(value: string): string {
+  return value.replace(/"/g, "").split(".").pop()?.toLowerCase() || "";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getSchemaColumns(schema: SchemaLike): Map<string, string> {
   const columns = Array.isArray(schema?.tables) ? schema.tables : [];
-  return new Set(
-    columns
-      .map((column: any) => String(column?.column_name || "").toLowerCase())
-      .filter(Boolean),
-  );
+  const result = new Map<string, string>();
+  for (const column of columns) {
+    const name = normalizeValue(column?.column_name);
+    if (name) result.set(name.toLowerCase(), name);
+  }
+  return result;
+}
+
+function getTableColumns(schema: SchemaLike): Map<string, Set<string>> {
+  const tableColumns = new Map<string, Set<string>>();
+  for (const column of schema.tables || []) {
+    const tableName = normalizeValue(column.table_name).toLowerCase();
+    const columnName = normalizeValue(column.column_name).toLowerCase();
+    if (!tableName || !columnName) continue;
+    if (!tableColumns.has(tableName)) tableColumns.set(tableName, new Set());
+    tableColumns.get(tableName)!.add(columnName);
+  }
+  return tableColumns;
 }
 
 function findMatchingColumn(
-  schema: object,
+  schema: SchemaLike,
   configuredColumn: string | undefined,
   candidates: string[],
 ): string | null {
-  if (configuredColumn?.trim()) return configuredColumn.trim();
-
   const columns = getSchemaColumns(schema);
+  const configured = configuredColumn?.trim();
+  if (configured) {
+    if (!isSafeIdentifier(configured)) return null;
+    return columns.get(configured.toLowerCase()) || null;
+  }
+
   for (const candidate of candidates) {
-    if (columns.has(candidate.toLowerCase())) return candidate;
+    const found = columns.get(candidate.toLowerCase());
+    if (found) return found;
   }
   return null;
 }
 
 function buildScopeFilters(args: {
-  schema: object;
+  schema: SchemaLike;
   context: AppContextConfig;
   tenantId: string;
   userId: string;
 }) {
-  const mode = args.context.dataScope?.mode || "auto";
+  const mode = normalizeScopeMode(args.context.dataScope?.mode);
   const tenantColumn = findMatchingColumn(
     args.schema,
     args.context.dataScope?.tenantColumn,
@@ -340,9 +539,36 @@ function buildScopeFilters(args: {
   );
 
   const filters: ScopeFilter[] = [];
+  const missing: string[] = [];
 
   if (mode === "database") {
-    return { mode, filters, tenantColumn, userColumn };
+    return { mode, filters, tenantColumn, userColumn, missing };
+  }
+
+  if (
+    ["tenant", "hybrid"].includes(mode) &&
+    (!args.tenantId || !tenantColumn || !isLikelySafeScopeValue(args.tenantId))
+  ) {
+    missing.push(
+      !args.tenantId
+        ? "tenant id"
+        : !tenantColumn
+          ? "tenant scope column"
+          : "safe tenant id",
+    );
+  }
+
+  if (
+    ["user", "hybrid"].includes(mode) &&
+    (!args.userId || !userColumn || !isLikelySafeScopeValue(args.userId))
+  ) {
+    missing.push(
+      !args.userId
+        ? "user id"
+        : !userColumn
+          ? "user scope column"
+          : "safe user id",
+    );
   }
 
   if (
@@ -351,51 +577,136 @@ function buildScopeFilters(args: {
     tenantColumn &&
     isLikelySafeScopeValue(args.tenantId)
   ) {
-    filters.push({ column: tenantColumn, value: args.tenantId });
+    filters.push({ kind: "tenant", column: tenantColumn, value: args.tenantId });
   }
 
   if (
-    ["auto", "user", "hybrid"].includes(mode) &&
+    ["user", "hybrid"].includes(mode) &&
     args.userId &&
     userColumn &&
     isLikelySafeScopeValue(args.userId)
   ) {
-    filters.push({ column: userColumn, value: args.userId });
+    filters.push({ kind: "user", column: userColumn, value: args.userId });
   }
 
-  return { mode, filters, tenantColumn, userColumn };
+  if (
+    mode === "auto" &&
+    filters.length === 0 &&
+    args.userId &&
+    userColumn &&
+    isLikelySafeScopeValue(args.userId)
+  ) {
+    filters.push({ kind: "user", column: userColumn, value: args.userId });
+  }
+
+  return { mode, filters, tenantColumn, userColumn, missing };
 }
 
-function injectScopeFilters(sql: string, filters: ScopeFilter[]): string {
-  let nextSql = sql;
+function extractTableRefs(sql: string): TableRef[] {
+  const refs: TableRef[] = [];
+  const re =
+    /\b(?:FROM|JOIN)\s+((?:"?[a-zA-Z_][\w]*"?\.)?"?[a-zA-Z_][\w]*"?)(?:\s+(?:AS\s+)?("?[a-zA-Z_][\w]*"?))?/gi;
+  const reserved = new Set([
+    "where",
+    "join",
+    "left",
+    "right",
+    "inner",
+    "outer",
+    "full",
+    "cross",
+    "on",
+    "group",
+    "order",
+    "limit",
+    "having",
+    "union",
+  ]);
 
-  for (const filter of filters) {
-    const alreadyScoped = new RegExp(`\\b${filter.column}\\b`, "i").test(nextSql);
-    if (alreadyScoped) continue;
+  for (const match of sql.matchAll(re)) {
+    const table = normalizeIdentifier(match[1]);
+    const alias = normalizeIdentifier(match[2] || table);
+    if (!table || reserved.has(table)) continue;
+    refs.push({ table, alias: reserved.has(alias) ? table : alias });
+  }
 
-    const condition = `${filter.column} = ${escapeSqlLiteral(filter.value)}`;
+  return refs;
+}
 
-    if (/\bWHERE\b/i.test(nextSql)) {
-      nextSql = nextSql.replace(/\bWHERE\b/i, `WHERE ${condition} AND `);
-      continue;
-    }
+function identifierPattern(value: string) {
+  return `"?${escapeRegExp(value)}"?`;
+}
 
-    let inserted = false;
-    for (const keyword of ["GROUP BY", "ORDER BY", "LIMIT", "HAVING"]) {
-      const re = new RegExp(`\\b${keyword}\\b`, "i");
-      if (re.test(nextSql)) {
-        nextSql = nextSql.replace(re, `WHERE ${condition} ${keyword}`);
-        inserted = true;
-        break;
-      }
-    }
+function hasExactScopePredicate(sql: string, ref: TableRef, filter: ScopeFilter) {
+  const alias = identifierPattern(ref.alias);
+  const table = identifierPattern(ref.table);
+  const column = identifierPattern(filter.column);
+  const literal = escapeRegExp(filter.value.replace(/'/g, "''"));
+  return new RegExp(
+    `(?:\\b${alias}\\s*\\.\\s*|\\b${table}\\s*\\.\\s*)?\\b${column}\\b\\s*=\\s*'${literal}'`,
+    "i",
+  ).test(sql);
+}
 
-    if (!inserted) {
-      nextSql = nextSql.replace(/;?\s*$/, ` WHERE ${condition}`);
+function insertWhereCondition(sql: string, condition: string): string {
+  if (/\bWHERE\b/i.test(sql)) {
+    return sql.replace(/\bWHERE\b/i, `WHERE ${condition} AND `);
+  }
+
+  for (const keyword of ["GROUP BY", "HAVING", "ORDER BY", "LIMIT", "OFFSET"]) {
+    const re = new RegExp(`\\b${keyword}\\b`, "i");
+    if (re.test(sql)) {
+      return sql.replace(re, `WHERE ${condition} ${keyword}`);
     }
   }
 
-  return nextSql;
+  return sql.replace(/;?\s*$/, ` WHERE ${condition}`);
+}
+
+function buildScopeConditions(
+  sql: string,
+  schema: SchemaLike,
+  filters: ScopeFilter[],
+) {
+  const tableColumns = getTableColumns(schema);
+  const refs = extractTableRefs(sql);
+  const conditions: string[] = [];
+
+  for (const filter of filters) {
+    const matchingRefs = refs.filter((ref) =>
+      tableColumns.get(ref.table)?.has(filter.column.toLowerCase()),
+    );
+
+    for (const ref of matchingRefs) {
+      if (hasExactScopePredicate(sql, ref, filter)) continue;
+      conditions.push(
+        `${quoteIdentifier(ref.alias || ref.table)}.${quoteIdentifier(
+          filter.column,
+        )} = ${escapeSqlLiteral(filter.value)}`,
+      );
+    }
+  }
+
+  return [...new Set(conditions)];
+}
+
+function injectScopeFilters(
+  sql: string,
+  schema: SchemaLike,
+  filters: ScopeFilter[],
+): string {
+  const conditions = buildScopeConditions(sql, schema, filters);
+  if (!conditions.length) return sql;
+  return insertWhereCondition(sql, conditions.join(" AND "));
+}
+
+function ensureSafetyLimit(sql: string, maxRows = 100): string {
+  if (/\bLIMIT\s+\d+\b/i.test(sql)) return sql;
+  if (!/\bFROM\b/i.test(sql)) return sql;
+  if (/\bOFFSET\b/i.test(sql)) {
+    return sql.replace(/\bOFFSET\b/i, `LIMIT ${maxRows} OFFSET`);
+  }
+  return sql.replace(/;?\s*$/, ` LIMIT ${maxRows}`);
 }
 
 function getFieldValue(
@@ -557,27 +868,115 @@ function buildErpActions(
   return actions;
 }
 
+function isNavigationIntent(question: string) {
+  return /\b(open|go to|show|take me to|navigate|launch|view)\b/i.test(
+    question,
+  );
+}
+
+function isSimpleNavigationRequest(question: string) {
+  const q = question.toLowerCase();
+  if (!isNavigationIntent(q)) return false;
+
+  const dataIntent =
+    /\b(total|count|how many|which|who|what|where|find|search|details|detail|low|pending|overdue|unpaid|paid|due|today|yesterday|tomorrow|week|month|year|top|best|worst|revenue|profit|balance|stock|quantity|with|for|by|from|between)\b/i;
+  if (dataIntent.test(q)) return false;
+
+  const wordCount = q.split(/\s+/).filter(Boolean).length;
+  return wordCount <= 6 || /\b(page|screen|module|section)\b/i.test(q);
+}
+
+function getDashboardPathFromText(text: string): string | null {
+  const match = text.match(/\/dashboard\/[a-z0-9/_-]*/i) || text.match(/\/dashboard\b/i);
+  return match ? match[0] : null;
+}
+
+function getLocalNavigationAction(
+  question: string,
+  routeMap: Record<string, string>,
+): BotAction | null {
+  const q = question.toLowerCase();
+  const explicitPath = getDashboardPathFromText(question);
+  if (explicitPath) {
+    return { type: "navigate", href: explicitPath, label: "Open page" };
+  }
+
+  if (!isSimpleNavigationRequest(q)) return null;
+
+  const candidates: Array<{ route: string; label: string; words: string[] }> = [
+    { route: "dashboard", label: "Open dashboard", words: ["dashboard", "home"] },
+    { route: "inventory", label: "Open inventory", words: ["inventory", "stock"] },
+    { route: "products", label: "Open products", words: ["product", "products"] },
+    { route: "customers", label: "Open customers", words: ["customer", "customers", "client", "clients"] },
+    { route: "sales", label: "Open sales", words: ["sale", "sales"] },
+    { route: "purchases", label: "Open purchases", words: ["purchase", "purchases"] },
+    { route: "tasks", label: "Open tasks", words: ["task", "tasks"] },
+    { route: "reports", label: "Open reports", words: ["report", "reports"] },
+    { route: "invoices", label: "Open invoices", words: ["invoice", "invoices", "bill", "bills"] },
+    { route: "staff", label: "Open staff", words: ["staff", "employee", "employees"] },
+    { route: "teams", label: "Open teams", words: ["team", "teams"] },
+    { route: "settings", label: "Open settings", words: ["setting", "settings"] },
+  ];
+
+  const match = candidates.find((candidate) =>
+    candidate.words.some((word) => q.includes(word)),
+  );
+
+  if (!match || !routeMap[match.route]) return null;
+  return { type: "navigate", href: routeMap[match.route], label: match.label };
+}
+
+function getHelpResponse(question: string, widgetMode: WidgetMode): string | null {
+  if (!/\b(help|hello|hi|salam|what can you do|how can you help)\b/i.test(question)) {
+    return null;
+  }
+
+  if (widgetMode === "erp") {
+    return "I can help with safe read-only ERP questions, summaries, and navigation. Try asking about invoices, products, customers, stock, staff, tasks, or reports with a date, status, name, or code when possible.";
+  }
+
+  return "I can answer read-only questions about your connected database, summarize results, and show charts when the data fits.";
+}
+
+function isUnableToQueryResult(result: any[]) {
+  return (
+    result.length === 1 &&
+    typeof result[0]?.error === "string" &&
+    result[0].error.toUpperCase() === "UNABLE_TO_QUERY"
+  );
+}
+
 export async function POST(req: Request) {
   const apiKey =
     req.headers.get("x-api-key") || req.headers.get("X-API-Key") || "";
 
   if (!apiKey) {
-    return Response.json(
-      { error: "API key required.", errorType: "NO_API_KEY" },
-      { status: 401, headers: CORS },
-    );
+    return errorResponse("API key required.", "NO_API_KEY", 401);
   }
 
-  const body = await req.json();
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body.", "INVALID_JSON", 400);
+  }
+
   const question = normalizeValue(body?.question);
   const preferredLang = body?.preferredLang;
   const tenantId =
     normalizeValue(body?.tenant_id) ||
+    normalizeValue(body?.tenantId) ||
+    normalizeValue(body?.company_id) ||
+    normalizeValue(body?.companyId) ||
+    normalizeValue(req.headers.get("x-company-id")) ||
     normalizeValue(req.headers.get("x-tenant-id"));
   const userId =
-    normalizeValue(body?.userId) || normalizeValue(req.headers.get("x-user-id"));
+    normalizeValue(body?.userId) ||
+    normalizeValue(body?.user_id) ||
+    normalizeValue(req.headers.get("x-user-id"));
   const userEmail =
     normalizeValue(body?.userEmail) ||
+    normalizeValue(body?.user_email) ||
     normalizeValue(req.headers.get("x-user-email"));
   const widgetModeFromRequest =
     normalizeValue(body?.widgetMode) ||
@@ -585,12 +984,16 @@ export async function POST(req: Request) {
   const chatHistory = Array.isArray(body?.chatHistory)
     ? (body.chatHistory as ChatHistoryItem[])
     : [];
+  const erpContext =
+    body?.erpContext && typeof body.erpContext === "object" ? body.erpContext : {};
+  const currentPage =
+    normalizeValue(body?.currentPage) ||
+    normalizeValue(body?.currentPath) ||
+    normalizeValue(erpContext?.currentPage) ||
+    normalizeValue(erpContext?.currentPath);
 
   if (!question) {
-    return Response.json(
-      { error: "Question is required." },
-      { status: 400, headers: CORS },
-    );
+    return errorResponse("Question is required.", "QUESTION_REQUIRED", 400);
   }
 
   const app = await prisma.connectedApp.findUnique({
@@ -608,17 +1011,11 @@ export async function POST(req: Request) {
   });
 
   if (!app || !app.isActive) {
-    return Response.json(
-      { error: "Invalid or inactive API key.", errorType: "INVALID_API_KEY" },
-      { status: 401, headers: CORS },
-    );
+    return errorResponse("Invalid or inactive API key.", "INVALID_API_KEY", 401);
   }
 
   if (!app.dbUrl) {
-    return Response.json(
-      { error: "No database URL. Add it in Settings.", errorType: "NO_DB" },
-      { status: 400, headers: CORS },
-    );
+    return errorResponse("No database URL. Add it in Settings.", "NO_DB", 400);
   }
 
   const detectedLang =
@@ -636,19 +1033,59 @@ export async function POST(req: Request) {
     type: providerType as any,
   });
 
-  let schema: object = {};
-  try {
-    schema = await getAppSchema(app.id);
-  } catch {}
-
   const appContext = parseAppContext(app.contextJson);
   const widgetMode =
-    widgetModeFromRequest === "erp" || appContext.widgetMode === "erp"
+    normalizeWidgetMode(widgetModeFromRequest) === "erp" ||
+    normalizeWidgetMode(appContext.widgetMode) === "erp"
       ? "erp"
       : "general";
+  const routeMap = {
+    ...DEFAULT_ROUTE_MAP,
+    ...sanitizeRouteMap(appContext.routeMap),
+  };
 
-  // Build scope filters — purely optional, injected only when a matching
-  // column is found in the schema. Never blocks the request.
+  const helpResponse = getHelpResponse(question, widgetMode);
+  if (helpResponse) {
+    return Response.json(
+      buildAssistantPayload({
+        explanation: helpResponse,
+        detectedLang,
+      }),
+      { headers: CORS },
+    );
+  }
+
+  if (widgetMode === "erp") {
+    const localAction = getLocalNavigationAction(question, routeMap);
+    if (localAction) {
+      return Response.json(
+        buildAssistantPayload({
+          explanation: "Opening that ERP page.",
+          actions: [localAction],
+          detectedLang,
+          meta: { handledLocally: true },
+        }),
+        { headers: CORS },
+      );
+    }
+  }
+
+  let schema: SchemaLike = {};
+  try {
+    schema = await getAppSchema(app.id);
+    if (!Array.isArray(schema.tables) || schema.tables.length === 0) {
+      throw new Error("No schema tables found");
+    }
+  } catch {
+    return errorResponse(
+      "I could not read this app's database schema yet. Rebuild the schema in Connected Apps, then try again.",
+      "SCHEMA_UNAVAILABLE",
+      503,
+      { detectedLang },
+    );
+  }
+
+  // Build scope filters from app settings and the discovered schema.
   const scope = buildScopeFilters({
     schema,
     context: appContext,
@@ -656,20 +1093,38 @@ export async function POST(req: Request) {
     userId,
   });
 
+  if (widgetMode === "erp" && scope.missing.length > 0) {
+    return errorResponse(
+      `The ERP bot needs ${scope.missing.join(
+        " and ",
+      )} before it can answer safely. Pass tenant/user context from the ERP session or update the connected app scope settings.`,
+      "MISSING_SCOPE_CONTEXT",
+      400,
+      {
+        detectedLang,
+        meta: {
+          scopeMode: scope.mode,
+          tenantColumn: scope.tenantColumn,
+          userColumn: scope.userColumn,
+        },
+      },
+    );
+  }
+
   const clarify = needsClarification(question, detectedLang);
   if (clarify) {
     return Response.json(
-      {
+      buildAssistantPayload({
         explanation: clarify,
         isClarification: true,
-        detectedLang,
         sql: null,
         result: null,
         visualization: "none",
         actions: [],
         insights: [],
+        detectedLang,
         chatLogId: null,
-      },
+      }),
       { headers: CORS },
     );
   }
@@ -705,10 +1160,14 @@ export async function POST(req: Request) {
     ...schema,
     _hint:
       `${scopeHint} ` +
-      "Exclude soft-deleted records when name is prefixed with [DELETED]. Use DISTINCT to avoid duplicates.",
+      "Exclude soft-deleted records when name is prefixed with [DELETED]. Use DISTINCT to avoid duplicates. Never select password, token, secret, key, hash, OTP, session, or connection-string columns.",
   };
 
-  const prompt = `${promptPrefix}\n${scopeHint}\nUser ID: ${userId || "unknown"}\nUser Email: ${userEmail || "unknown"}\n\n${contextPrompt}`.trim();
+  const prompt = `${promptPrefix}\n${scopeHint}\nUser ID: ${
+    userId || "unknown"
+  }\nUser Email: ${userEmail || "unknown"}\nCurrent ERP page: ${
+    currentPage || "unknown"
+  }\n\n${contextPrompt}`.trim();
 
   let sql = "";
   try {
@@ -722,21 +1181,19 @@ export async function POST(req: Request) {
     sql = cleanSQL(raw);
   } catch (err: any) {
     const fe = friendlyError(err.message);
-    return Response.json(
-      { error: fe.message, errorType: fe.errorType },
-      { status: 500, headers: CORS },
-    );
+    return errorResponse(fe.message, fe.errorType, 500, { detectedLang });
   }
 
   if (scope.filters.length) {
-    sql = injectScopeFilters(sql, scope.filters);
+    sql = injectScopeFilters(sql, schema, scope.filters);
   }
 
+  sql = ensureSafetyLimit(sql);
+
   if (!isSafeSQL(sql)) {
-    return Response.json(
-      { error: "Unsafe SQL blocked.", errorType: "UNSAFE_SQL" },
-      { status: 400, headers: CORS },
-    );
+    return errorResponse("Unsafe SQL blocked.", "UNSAFE_SQL", 400, {
+      detectedLang,
+    });
   }
 
   const userPrisma = new PrismaClient({
@@ -746,6 +1203,21 @@ export async function POST(req: Request) {
   try {
     const rawResult = (await userPrisma.$queryRawUnsafe(sql)) as any[];
     let result = serialize(rawResult);
+    if (isUnableToQueryResult(result)) {
+      return Response.json(
+        buildAssistantPayload({
+          explanation:
+            "I could not answer that safely from the available database schema. Try adding a specific module, date range, status, name, or code.",
+          sql,
+          result: [],
+          visualization: "none",
+          actions: widgetMode === "erp" ? buildErpActions(question, [], routeMap) : [],
+          detectedLang,
+        }),
+        { headers: CORS },
+      );
+    }
+    result = redactSensitiveFields(result);
     result = filterSmartResult(result);
     const visualization = detectViz(result, question);
     if (visualization === "stacked") result = pivotStacked(result);
@@ -769,10 +1241,7 @@ export async function POST(req: Request) {
 
     const actions =
       widgetMode === "erp"
-        ? buildErpActions(question, result, {
-            ...DEFAULT_ROUTE_MAP,
-            ...(appContext.routeMap || {}),
-          })
+        ? buildErpActions(question, result, routeMap)
         : [];
 
     const log = await prisma.chatLog
@@ -797,7 +1266,7 @@ export async function POST(req: Request) {
       .catch(() => {});
 
     return Response.json(
-      {
+      buildAssistantPayload({
         explanation,
         sql,
         result,
@@ -806,7 +1275,7 @@ export async function POST(req: Request) {
         insights: getInsights(result),
         detectedLang,
         chatLogId: log?.id,
-      },
+      }),
       { headers: CORS },
     );
   } catch (err: any) {
@@ -822,13 +1291,30 @@ export async function POST(req: Request) {
 
       let fixedSql = cleanSQL(rawFixed);
       if (scope.filters.length) {
-        fixedSql = injectScopeFilters(fixedSql, scope.filters);
+        fixedSql = injectScopeFilters(fixedSql, schema, scope.filters);
       }
+      fixedSql = ensureSafetyLimit(fixedSql);
 
       if (!isSafeSQL(fixedSql)) throw new Error("Fixed SQL unsafe");
 
       const rawResult = (await userPrisma.$queryRawUnsafe(fixedSql)) as any[];
       let result = serialize(rawResult);
+      if (isUnableToQueryResult(result)) {
+        return Response.json(
+          buildAssistantPayload({
+            explanation:
+              "I could not answer that safely from the available database schema. Try adding a specific module, date range, status, name, or code.",
+            sql: fixedSql,
+            result: [],
+            visualization: "none",
+            actions:
+              widgetMode === "erp" ? buildErpActions(question, [], routeMap) : [],
+            detectedLang,
+          }),
+          { headers: CORS },
+        );
+      }
+      result = redactSensitiveFields(result);
       result = filterSmartResult(result);
       const visualization = detectViz(result, question);
       if (visualization === "stacked") result = pivotStacked(result);
@@ -852,10 +1338,7 @@ export async function POST(req: Request) {
 
       const actions =
         widgetMode === "erp"
-          ? buildErpActions(question, result, {
-              ...DEFAULT_ROUTE_MAP,
-              ...(appContext.routeMap || {}),
-            })
+          ? buildErpActions(question, result, routeMap)
           : [];
 
       const log = await prisma.chatLog
@@ -880,7 +1363,7 @@ export async function POST(req: Request) {
         .catch(() => {});
 
       return Response.json(
-        {
+        buildAssistantPayload({
           explanation,
           sql: fixedSql,
           result,
@@ -889,7 +1372,7 @@ export async function POST(req: Request) {
           insights: getInsights(result),
           detectedLang,
           chatLogId: log?.id,
-        },
+        }),
         { headers: CORS },
       );
     } catch (fixErr: any) {
@@ -906,10 +1389,7 @@ export async function POST(req: Request) {
         .catch(() => {});
 
       const fe = friendlyError(fixErr.message);
-      return Response.json(
-        { error: fe.message, errorType: fe.errorType },
-        { status: 500, headers: CORS },
-      );
+      return errorResponse(fe.message, fe.errorType, 500, { detectedLang });
     }
   } finally {
     await userPrisma.$disconnect();

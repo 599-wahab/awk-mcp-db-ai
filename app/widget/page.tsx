@@ -52,9 +52,11 @@ function WidgetChat() {
   const params = useSearchParams();
   const apiKey = params.get("key") || "";
   const tenantId = params.get("tenantId") || "";
+  const companyId = params.get("companyId") || "";
   const userId = params.get("userId") || "";
   const userEmail = params.get("userEmail") || "";
   const widgetMode = params.get("widgetMode") || "general";
+  const currentPath = params.get("currentPath") || "";
   const parentOrigin = params.get("parentOrigin") || "*";
 
   const [messages, setMessages] = useState<Message[]>([
@@ -148,6 +150,7 @@ function WidgetChat() {
         "x-api-key": apiKey,
       };
       if (tenantId) headers["x-tenant-id"] = tenantId;
+      if (companyId) headers["x-company-id"] = companyId;
       if (widgetMode) headers["x-widget-mode"] = widgetMode;
       if (userId) headers["x-user-id"] = userId;
       if (userEmail) headers["x-user-email"] = userEmail;
@@ -158,9 +161,11 @@ function WidgetChat() {
         body: JSON.stringify({
           question: trimmed,
           tenant_id: tenantId || undefined,
+          company_id: companyId || undefined,
           userId: userId || undefined,
           userEmail: userEmail || undefined,
           widgetMode,
+          currentPath: currentPath || undefined,
           chatHistory,
         }),
       });
@@ -170,22 +175,30 @@ function WidgetChat() {
         throw new Error(data?.error || "Request failed.");
       }
 
+      const assistantText =
+        data.response || data.explanation || data.message || data.error || "Error occurred.";
+      const actions = Array.isArray(data.actions)
+        ? data.actions
+        : data.action
+          ? [data.action]
+          : [];
+
       setMessages((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
-          content: data.explanation || data.error || "Error occurred.",
+          content: assistantText,
           isUser: false,
           timestamp: new Date(),
           sql: data.sql,
           result: data.result,
           visualization: data.visualization,
           insights: data.insights,
-          actions: data.actions,
+          actions,
         },
       ]);
 
-      if (ttsOn && data.explanation) speakText(data.explanation);
+      if (ttsOn && assistantText) speakText(assistantText);
     } catch (error) {
       setMessages((current) => [
         ...current,
