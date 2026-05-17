@@ -65,8 +65,11 @@ export async function getAppSchema(appId: string): Promise<DatabaseSchema> {
 
 // fetchDatabaseSchema remains unchanged
 async function fetchDatabaseSchema(dbUrl: string): Promise<DatabaseSchema> {
-  const pool = new Pool({ connectionString: dbUrl });
-  const client = await pool.connect();
+  const pool = new Pool({ connectionString: dbUrl, connectionTimeoutMillis: 15000 });
+  const client = await pool.connect().catch(async (error) => {
+    await pool.end().catch(() => {});
+    throw error;
+  });
   try {
     const columnQuery = `
       SELECT table_name, column_name, data_type, is_nullable

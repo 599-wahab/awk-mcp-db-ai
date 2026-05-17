@@ -124,7 +124,14 @@ export default function WidgetSitesPage() {
     const data = await res.json();
     setRebuildingId(null);
     if (data.success) { alert(`✅ Schema rebuilt! Found ${data.tables} tables.`); fetchApps(); }
-    else alert("❌ Failed: " + (data.error || "Unknown error"));
+    else {
+      const detail = [
+        `❌ ${data.error || "Schema rebuild failed."}`,
+        data.advice ? `\n${data.advice}` : "",
+        data.code ? `\nCode: ${data.code}` : "",
+      ].filter(Boolean).join("\n");
+      alert(detail);
+    }
   }
 
   async function openDataEditor(app: App) {
