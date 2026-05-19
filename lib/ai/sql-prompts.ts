@@ -20,7 +20,14 @@ STRICT RULES:
 10. For "pending", "remaining", or "open" tasks, use the real status/completed/is_done columns in the schema.
 11. For revenue, sales, payment, amount, balance, or total questions, choose real numeric money columns from the schema.
 12. If several tables could match, choose the safest table based on foreign keys and names. Do not join unrelated tables.
-13. If the request is navigation/help/non-data, or a valid query cannot be written from this schema, return exactly: SELECT 'UNABLE_TO_QUERY' AS error
+13. For record lookup requests such as find, search, locate, open, "show me where", "who is X", or pronoun follow-ups, always include the row id plus safe display fields.
+14. Staff lookups should select available fields from: id, employee_id, full_name, designation, department, email, phone, address, is_active.
+15. Product lookups should select available fields from: id, product_id_code, product_id, product_code, name, product_name, category, material, finish, is_active.
+16. Customer lookups should select available fields from: id, customer_code, company_name, contact_name, customer_name, email, phone, city, address, is_active.
+17. Task lookups should select available fields from: id, task_id, title, status, priority, assigned_to_staff, assigned_to_team.
+18. Invoice lookups should select available fields from: id, invoice_number, invoice_ref, invoice_no, status, total_amount, total, customer_id.
+19. For follow-up pronouns like "show me where he is", use the previous context/result/action to query the same record by id when available.
+20. If the request is navigation/help/non-data, or a valid query cannot be written from this schema, return exactly: SELECT 'UNABLE_TO_QUERY' AS error
 
 SQL:`;
 }
@@ -32,6 +39,7 @@ export function buildExplanationPrompt(
   return `Explain these database results to the user in 1-3 short, practical sentences.
 
 Match the user's language when clear. If the result is empty, say that no matching records were found and suggest one useful filter to try.
+Never include SQL, query text, API keys, credentials, tokens, or connection strings in the answer.
 
 User request:
 ${question}

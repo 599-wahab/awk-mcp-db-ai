@@ -36,6 +36,10 @@ type ScopeFilter = {
 type ChatHistoryItem = {
   content?: string;
   isUser?: boolean;
+  sql?: string;
+  result?: Array<Record<string, unknown>>;
+  actions?: BotAction[];
+  action?: BotAction | null;
 };
 
 type SchemaColumn = {
@@ -67,6 +71,8 @@ type BotAction =
     }
   | { type: "show_summary"; entity: string; payload: Record<string, unknown> }
   | { type: "clarify"; question: string; options?: string[] };
+
+type ErpRecordEntity = Extract<BotAction, { type: "open_record" }>["entity"];
 
 type AssistantPayload = {
   response: string;
@@ -756,10 +762,193 @@ function pickSummaryFields(
   return summary;
 }
 
+const ERP_ENTITY_CONFIGS = {
+  invoice: {
+    routeKey: "invoices",
+    idFields: ["id", "invoice_id", "invoice_number", "invoice_no", "invoice_ref", "number"],
+    labelFields: ["invoice_number", "invoice_no", "invoice_ref", "number", "customer_name", "name"],
+    summaryFields: ["id", "invoice_number", "invoice_no", "invoice_ref", "customer_name", "date", "total", "total_amount", "status", "due_amount"],
+    tableHints: ["invoice", "invoices", "bills"],
+    rowHints: ["invoice_number", "invoice_no", "invoice_ref", "total_amount"],
+  },
+  product: {
+    routeKey: "products",
+    idFields: ["id", "product_id", "product_id_code", "code", "product_code", "barcode"],
+    labelFields: ["product_name", "name", "product_id_code", "product_code", "code"],
+    summaryFields: ["id", "product_name", "name", "product_id_code", "product_code", "barcode", "category", "material", "finish", "stock", "price", "is_active"],
+    tableHints: ["product", "products", "inventory"],
+    rowHints: ["product_id_code", "product_code", "product_name", "material", "finish"],
+  },
+  customer: {
+    routeKey: "customers",
+    idFields: ["id", "customer_id", "customer_code", "code", "email", "phone"],
+    labelFields: ["company_name", "customer_name", "contact_name", "name", "customer_code", "code"],
+    summaryFields: ["id", "customer_code", "company_name", "customer_name", "contact_name", "name", "phone", "email", "city", "address", "balance", "is_active"],
+    tableHints: ["customer", "customers", "clients"],
+    rowHints: ["customer_code", "company_name", "contact_name"],
+  },
+  staff: {
+    routeKey: "staff",
+    idFields: ["id", "staff_id", "employee_id"],
+    labelFields: ["full_name", "name", "employee_id", "email"],
+    summaryFields: ["id", "employee_id", "full_name", "name", "designation", "department", "email", "phone", "address", "role", "shift", "is_active"],
+    tableHints: ["staff", "employee", "employees", "users", "user_profiles"],
+    rowHints: ["employee_id", "full_name", "designation", "department"],
+  },
+  team: {
+    routeKey: "teams",
+    idFields: ["id", "team_id", "name"],
+    labelFields: ["name", "team_name"],
+    summaryFields: ["id", "name", "team_name", "lead", "leader"],
+    tableHints: ["team", "teams"],
+    rowHints: ["team_name", "lead", "leader"],
+  },
+  task: {
+    routeKey: "tasks",
+    idFields: ["id", "task_id", "title"],
+    labelFields: ["title", "name", "task_name"],
+    summaryFields: ["id", "title", "name", "assignee", "assigned_to_staff", "assigned_to_team", "status", "priority", "deadline"],
+    tableHints: ["task", "tasks"],
+    rowHints: ["task_id", "title", "priority", "assigned_to_staff", "assigned_to_team"],
+  },
+} as const;
+
+function hasRecordLookupIntent(question: string) {
+  return /\b(find|search|locate|open|show me where|show where|where is|where's|show that|show this|show me|search me)\b/i.test(
+    question,
+  );
+}
+
+function hasFollowUpRecordIntent(question: string) {
+  return /\b(open it|open that|show it|show that|show me where (he|she|it|they) (is|are)|where (is|are) (he|she|it|they)|that product|that customer|that staff|that invoice|that task)\b/i.test(
+    question,
+  );
+}
+
+function getRowKeys(row: Record<string, unknown>) {
+  return Object.keys(row).map((key) => key.toLowerCase());
+}
+
+function getSqlEntity(sql?: string | null): ErpRecordEntity | null {
+  const normalized = (sql || "").toLowerCase();
+  for (const [entity, config] of Object.entries(ERP_ENTITY_CONFIGS) as Array<
+    [ErpRecordEntity, (typeof ERP_ENTITY_CONFIGS)[ErpRecordEntity]]
+  >) {
+    if (config.tableHints.some((hint) => new RegExp(`\\b${hint}\\b`, "i").test(normalized))) {
+      return entity;
+    }
+  }
+  return null;
+}
+
+function getQuestionEntity(question: string): ErpRecordEntity | null {
+  const q = question.toLowerCase();
+  for (const [entity, config] of Object.entries(ERP_ENTITY_CONFIGS) as Array<
+    [ErpRecordEntity, (typeof ERP_ENTITY_CONFIGS)[ErpRecordEntity]]
+  >) {
+    if (config.tableHints.some((hint) => q.includes(hint))) return entity;
+  }
+  if (/\bbill\b/i.test(question)) return "invoice";
+  if (/\bwho is\b/i.test(question)) return "staff";
+  return null;
+}
+
+function getRowEntity(row: Record<string, unknown>): ErpRecordEntity | null {
+  const keys = getRowKeys(row);
+  for (const [entity, config] of Object.entries(ERP_ENTITY_CONFIGS) as Array<
+    [ErpRecordEntity, (typeof ERP_ENTITY_CONFIGS)[ErpRecordEntity]]
+  >) {
+    if (config.rowHints.some((hint) => keys.includes(hint.toLowerCase()))) {
+      return entity;
+    }
+  }
+  return null;
+}
+
+function detectRecordEntity(args: {
+  question: string;
+  sql?: string | null;
+  row?: Record<string, unknown>;
+}): ErpRecordEntity | null {
+  return (
+    getQuestionEntity(args.question) ||
+    getSqlEntity(args.sql) ||
+    (args.row ? getRowEntity(args.row) : null)
+  );
+}
+
+function buildRecordLabel(entity: ErpRecordEntity, row: Record<string, unknown>) {
+  const config = ERP_ENTITY_CONFIGS[entity];
+  const label = getFieldValue(row, config.labelFields);
+  return label ? `Open ${label}` : `Open ${entity}`;
+}
+
+function entityTitle(entity: ErpRecordEntity) {
+  return entity.charAt(0).toUpperCase() + entity.slice(1);
+}
+
+function buildActionAwareExplanation(args: {
+  question: string;
+  result: any[];
+  actions: BotAction[];
+  fallback: string;
+  detectedLang: "ur" | "en";
+}) {
+  const clarify = args.actions.find((action) => action.type === "clarify");
+  if (clarify?.type === "clarify") return clarify.question;
+
+  const openRecord = args.actions.find(
+    (action): action is Extract<BotAction, { type: "open_record" }> =>
+      action.type === "open_record",
+  );
+  if (!openRecord) return args.fallback;
+
+  const row = args.result[0] as Record<string, unknown> | undefined;
+  const label =
+    row && getFieldValue(row, ERP_ENTITY_CONFIGS[openRecord.entity].labelFields);
+  const displayName = String(label || openRecord.label || entityTitle(openRecord.entity)).replace(
+    /^Open\s+/i,
+    "",
+  );
+
+  if (args.detectedLang === "ur") {
+    return `مجھے ${displayName} مل گیا۔ میں اس کا ریکارڈ کھول رہا ہوں۔`;
+  }
+
+  if (hasFollowUpRecordIntent(args.question)) {
+    return `${displayName} is on the ${entityTitle(
+      openRecord.entity,
+    )} profile. Opening and highlighting the record now.`;
+  }
+
+  return `I found ${displayName} in ${entityTitle(
+    openRecord.entity,
+  )}. Opening and highlighting the record now.`;
+}
+
+function getLastOpenRecordAction(chatHistory: ChatHistoryItem[]): Extract<BotAction, { type: "open_record" }> | null {
+  for (const item of [...chatHistory].reverse()) {
+    const actions = [
+      ...(Array.isArray(item.actions) ? item.actions : []),
+      ...(item.action ? [item.action] : []),
+    ];
+    const action = actions.find(
+      (candidate): candidate is Extract<BotAction, { type: "open_record" }> =>
+        candidate?.type === "open_record" && !!candidate.id,
+    );
+    if (action) return action;
+  }
+  return null;
+}
+
 function buildErpActions(
   question: string,
   result: any[],
   routeMap: Record<string, string>,
+  options: {
+    sql?: string | null;
+    chatHistory?: ChatHistoryItem[];
+  } = {},
 ): BotAction[] {
   const q = question.toLowerCase();
   const actions: BotAction[] = [];
@@ -794,58 +983,44 @@ function buildErpActions(
     });
   }
 
-  const entityConfigs = {
-    invoice: {
-      routeKey: "invoices",
-      idFields: ["invoice_number", "invoice_no", "invoice_id", "id", "number"],
-      labelFields: ["invoice_number", "invoice_no", "number", "customer_name", "name"],
-      summaryFields: ["invoice_number", "customer_name", "date", "total", "status", "due_amount"],
-    },
-    product: {
-      routeKey: "products",
-      idFields: ["id", "product_id", "code", "product_code", "barcode"],
-      labelFields: ["product_name", "name", "product_code", "code"],
-      summaryFields: ["product_name", "name", "product_code", "barcode", "stock", "price"],
-    },
-    customer: {
-      routeKey: "customers",
-      idFields: ["id", "customer_id", "code", "customer_code", "email", "phone"],
-      labelFields: ["company_name", "customer_name", "name", "code"],
-      summaryFields: ["company_name", "customer_name", "name", "phone", "email", "balance"],
-    },
-    staff: {
-      routeKey: "staff",
-      idFields: ["id", "staff_id", "employee_id"],
-      labelFields: ["full_name", "name", "employee_id"],
-      summaryFields: ["full_name", "name", "employee_id", "role", "shift"],
-    },
-    team: {
-      routeKey: "teams",
-      idFields: ["id", "team_id", "name"],
-      labelFields: ["name", "team_name"],
-      summaryFields: ["name", "team_name", "lead", "leader"],
-    },
-    task: {
-      routeKey: "tasks",
-      idFields: ["id", "task_id", "title"],
-      labelFields: ["title", "name", "task_name"],
-      summaryFields: ["title", "assignee", "status", "priority", "deadline"],
-    },
-  } as const;
+  const lookupIntent = hasRecordLookupIntent(question);
+  const followUpIntent = hasFollowUpRecordIntent(question);
+  const priorRecord = followUpIntent
+    ? getLastOpenRecordAction(options.chatHistory || [])
+    : null;
 
-  const detectedEntity = (Object.keys(entityConfigs) as Array<
-    keyof typeof entityConfigs
-  >).find(
-    (entity) => q.includes(entity) || (entity === "invoice" && q.includes("bill")),
-  );
-
-  if (!detectedEntity || !Array.isArray(result) || result.length === 0) {
+  if (priorRecord && (!Array.isArray(result) || result.length === 0)) {
+    actions.push({
+      ...priorRecord,
+      label: priorRecord.label || `Open ${priorRecord.entity}`,
+    });
     return actions;
   }
 
-  const config = entityConfigs[detectedEntity];
+  const detectedEntity = detectRecordEntity({
+    question,
+    sql: options.sql,
+    row: result?.[0] as Record<string, unknown> | undefined,
+  });
 
-  if (result.length > 1) {
+  if (!detectedEntity || !Array.isArray(result)) {
+    return actions;
+  }
+
+  const config = ERP_ENTITY_CONFIGS[detectedEntity];
+
+  if (result.length === 0) {
+    if (lookupIntent && routeMap[config.routeKey]) {
+      actions.push({
+        type: "navigate",
+        href: routeMap[config.routeKey],
+        label: `Open ${detectedEntity}`,
+      });
+    }
+    return actions;
+  }
+
+  if (result.length > 1 && lookupIntent) {
     const options = result.slice(0, 3).map((row) => {
       const label =
         getFieldValue(row, config.labelFields) ?? getFieldValue(row, config.idFields);
@@ -859,18 +1034,20 @@ function buildErpActions(
     return actions;
   }
 
+  if (result.length > 1) return actions;
+
   const row = result[0] as Record<string, any>;
   const recordId = getFieldValue(row, config.idFields);
   const label = getFieldValue(row, config.labelFields);
   const href = routeMap[config.routeKey];
   const payload = pickSummaryFields(row, config.summaryFields);
 
-  if (recordId !== undefined && recordId !== null) {
+  if ((lookupIntent || followUpIntent) && recordId !== undefined && recordId !== null) {
     actions.push({
       type: "open_record",
       entity: detectedEntity,
       id: String(recordId),
-      label: label ? `Open ${label}` : `Open ${detectedEntity}`,
+      label: label ? `Open ${label}` : buildRecordLabel(detectedEntity, row),
       href,
       payload,
     });
@@ -1188,11 +1365,24 @@ async function handlePost(req: Request) {
   if (chatHistory.length) {
     const recent = chatHistory.slice(-4);
     const historyText = recent
-      .map((item) =>
-        item.isUser
-          ? `User: ${item.content || ""}`
-          : `Assistant result: ${String(item.content || "").slice(0, 120)}`,
-      )
+      .map((item) => {
+        if (item.isUser) return `User: ${item.content || ""}`;
+
+        const resultText = Array.isArray(item.result)
+          ? ` Result JSON: ${JSON.stringify(item.result.slice(0, 2)).slice(0, 500)}`
+          : "";
+        const actions = [
+          ...(Array.isArray(item.actions) ? item.actions : []),
+          ...(item.action ? [item.action] : []),
+        ];
+        const actionText = actions.length
+          ? ` Actions: ${JSON.stringify(actions).slice(0, 400)}`
+          : "";
+        return `Assistant: ${String(item.content || "").slice(
+          0,
+          180,
+        )}${resultText}${actionText}`;
+      })
       .join("\n");
     contextPrompt = `Previous context:\n${historyText}\n\nCurrent question: ${question}`;
   }
@@ -1266,7 +1456,10 @@ async function handlePost(req: Request) {
           sql,
           result: [],
           visualization: "none",
-          actions: widgetMode === "erp" ? buildErpActions(question, [], routeMap) : [],
+          actions:
+            widgetMode === "erp"
+              ? buildErpActions(question, [], routeMap, { sql, chatHistory })
+              : [],
           detectedLang,
         }),
         { headers: CORS },
@@ -1296,8 +1489,15 @@ async function handlePost(req: Request) {
 
     const actions =
       widgetMode === "erp"
-        ? buildErpActions(question, result, routeMap)
+        ? buildErpActions(question, result, routeMap, { sql, chatHistory })
         : [];
+    explanation = buildActionAwareExplanation({
+      question,
+      result,
+      actions,
+      fallback: explanation,
+      detectedLang,
+    });
 
     const log = await prisma.chatLog
       .create({
@@ -1363,7 +1563,12 @@ async function handlePost(req: Request) {
             result: [],
             visualization: "none",
             actions:
-              widgetMode === "erp" ? buildErpActions(question, [], routeMap) : [],
+              widgetMode === "erp"
+                ? buildErpActions(question, [], routeMap, {
+                    sql: fixedSql,
+                    chatHistory,
+                  })
+                : [],
             detectedLang,
           }),
           { headers: CORS },
@@ -1393,8 +1598,18 @@ async function handlePost(req: Request) {
 
       const actions =
         widgetMode === "erp"
-          ? buildErpActions(question, result, routeMap)
+          ? buildErpActions(question, result, routeMap, {
+              sql: fixedSql,
+              chatHistory,
+            })
           : [];
+      explanation = buildActionAwareExplanation({
+        question,
+        result,
+        actions,
+        fallback: explanation,
+        detectedLang,
+      });
 
       const log = await prisma.chatLog
         .create({

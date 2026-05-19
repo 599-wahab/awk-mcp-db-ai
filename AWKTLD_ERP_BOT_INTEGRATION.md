@@ -109,6 +109,73 @@ type BotAction =
   | { type: "clarify"; question: string; options?: string[] };
 ```
 
+## Record Actions
+
+The hosted bot should return explicit `open_record` actions when the user asks to find, search, locate, open, or show a specific ERP record.
+
+Expected behavior:
+
+- `who is Wahad` answers with useful details.
+- `find/search/open/locate Wahad` answers and returns `open_record`.
+- `show me where he is`, `open it`, or `show that product` uses recent `chatHistory` to resolve the last matching record and returns `open_record`.
+- Multiple matches return `clarify` with practical options, not auto-open.
+- No matches should say no matching record was found and may include a safe `navigate` action to the relevant module page.
+
+Record lookup SQL rules:
+
+- Staff lookup should select available safe fields from `id`, `employee_id`, `full_name`, `designation`, `department`, `email`, `phone`, `address`, `is_active`.
+- Product lookup should select available safe fields from `id`, `product_id_code`, `product_id`, `product_code`, `name`, `product_name`, `category`, `material`, `finish`, `is_active`.
+- Customer lookup should select available safe fields from `id`, `customer_code`, `company_name`, `contact_name`, `customer_name`, `email`, `phone`, `city`, `address`, `is_active`.
+- Task lookup should select available safe fields from `id`, `task_id`, `title`, `status`, `priority`, `assigned_to_staff`, `assigned_to_team`.
+- Invoice lookup should select available safe fields from `id`, `invoice_number`, `invoice_ref`, `invoice_no`, `status`, `total_amount`, `total`, `customer_id`.
+- Never use `SELECT *`.
+- Always include a `LIMIT`.
+
+Example `open_record` response:
+
+```json
+{
+  "response": "I found Wahad in Staff. Opening and highlighting the record now.",
+  "sql": "SELECT id, employee_id, full_name, designation, department, email, phone FROM staff WHERE tenant_id = 'tenant-id' AND full_name ILIKE '%wahad%' LIMIT 10",
+  "result": [
+    {
+      "id": "staff-id-here",
+      "employee_id": "AWK-EMP-108683198",
+      "full_name": "Wahad",
+      "designation": "manager",
+      "department": "Packaging",
+      "email": "wahad@gmail.com",
+      "phone": "456789"
+    }
+  ],
+  "visualization": "none",
+  "insights": [],
+  "actions": [
+    {
+      "type": "open_record",
+      "entity": "staff",
+      "id": "staff-id-here",
+      "label": "Open Wahad"
+    }
+  ]
+}
+```
+
+Example multiple-match response:
+
+```json
+{
+  "response": "I found more than one Wahad. Which one should I open?",
+  "actions": [
+    {
+      "type": "clarify",
+      "question": "Which Wahad should I open?",
+      "options": ["Wahad - Packaging", "Wahad - Sales"]
+    }
+  ]
+}
+```
+
 ERP-side handler:
 
 ```ts

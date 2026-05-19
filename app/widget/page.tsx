@@ -130,6 +130,9 @@ function WidgetChat() {
     const chatHistory = messages.slice(-6).map((message) => ({
       content: message.content,
       isUser: message.isUser,
+      sql: message.sql,
+      result: message.result,
+      actions: message.actions,
     }));
 
     setMessages((current) => [
